@@ -150,6 +150,9 @@ func tencentHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Resp
 			Code:    tencentSb.Response.Error.Code,
 		}, resp.StatusCode)
 	}
+	if tencentSb.Response.Id != "" {
+		info.UpstreamResponseId = tencentSb.Response.Id
+	}
 	fullTextResponse := responseTencent2OpenAI(&tencentSb.Response)
 	jsonResponse, err := common.Marshal(fullTextResponse)
 	if err != nil {
@@ -158,6 +161,7 @@ func tencentHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Resp
 	c.Writer.Header().Set("Content-Type", "application/json")
 	c.Writer.WriteHeader(resp.StatusCode)
 	service.IOCopyBytesGracefully(c, resp, jsonResponse)
+	service.EnsureCompleteUsage(c, &fullTextResponse.Usage, info.GetEstimatePromptTokens(), "", info.UpstreamModelName)
 	return &fullTextResponse.Usage, nil
 }
 

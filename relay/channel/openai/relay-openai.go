@@ -222,6 +222,8 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	if !containStreamUsage {
 		usage = service.ResponseText2Usage(c, responseTextBuilder.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
 		usage.CompletionTokens += toolCount * 7
+	} else {
+		service.EnsureCompleteUsage(c, usage, info.GetEstimatePromptTokens(), responseTextBuilder.String(), info.UpstreamModelName)
 	}
 
 	applyUsagePostProcessing(info, usage, common.StringToByteSlice(lastStreamData))
@@ -263,6 +265,10 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 
+	if simpleResponse.Id != "" {
+		info.UpstreamResponseId = simpleResponse.Id
+	}
+
 	if oaiError := simpleResponse.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
@@ -280,19 +286,19 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 	}
 
 	usageModified := false
-	if simpleResponse.Usage.PromptTokens == 0 {
-		completionTokens := simpleResponse.Usage.CompletionTokens
-		if completionTokens == 0 {
+	if simpleResponse.Usage.PromptTokens == 0 || simpleResponse.Usage.CompletionTokens == 0 {
+		if simpleResponse.Usage.PromptTokens == 0 {
+			simpleResponse.Usage.PromptTokens = info.GetEstimatePromptTokens()
+		}
+		if simpleResponse.Usage.CompletionTokens == 0 {
+			completionTokens := 0
 			for _, choice := range simpleResponse.Choices {
 				ctkm := service.CountTextToken(choice.Message.StringContent()+choice.Message.ReasoningContent+choice.Message.Reasoning, info.UpstreamModelName)
 				completionTokens += ctkm
 			}
+			simpleResponse.Usage.CompletionTokens = completionTokens
 		}
-		simpleResponse.Usage = dto.Usage{
-			PromptTokens:     info.GetEstimatePromptTokens(),
-			CompletionTokens: completionTokens,
-			TotalTokens:      info.GetEstimatePromptTokens() + completionTokens,
-		}
+		simpleResponse.Usage.TotalTokens = simpleResponse.Usage.PromptTokens + simpleResponse.Usage.CompletionTokens
 		usageModified = true
 	}
 

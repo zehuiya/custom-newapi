@@ -31,3 +31,22 @@ func ResponseText2Usage(c *gin.Context, responseText string, modeName string, pr
 func ValidUsage(usage *dto.Usage) bool {
 	return usage != nil && (usage.PromptTokens != 0 || usage.CompletionTokens != 0)
 }
+
+func EnsureCompleteUsage(c *gin.Context, usage *dto.Usage, promptEstimate int, responseText string, model string) {
+	if usage == nil {
+		return
+	}
+	modified := false
+	if usage.PromptTokens == 0 && promptEstimate > 0 {
+		usage.PromptTokens = promptEstimate
+		modified = true
+	}
+	if usage.CompletionTokens == 0 && responseText != "" {
+		usage.CompletionTokens = EstimateTokenByModel(model, responseText)
+		modified = true
+	}
+	if modified {
+		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+		common.SetContextKey(c, constant.ContextKeyLocalCountTokens, true)
+	}
+}

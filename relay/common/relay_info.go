@@ -104,6 +104,7 @@ type RelayInfo struct {
 	RequestHeaders         map[string]string
 	ShouldIncludeUsage     bool
 	ShouldInjectCacheInfo  bool // 是否需要注入缓存信息（渠道名包含cache且输入token>=4096）
+	UpstreamResponseId     string
 	DisablePing            bool // 是否禁止向下游发送自定义 Ping
 	ClientWs               *websocket.Conn
 	TargetWs               *websocket.Conn

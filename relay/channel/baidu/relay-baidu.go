@@ -123,6 +123,9 @@ func baiduStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 			common.SysLog("error unmarshalling stream response: " + err.Error())
 			return true
 		}
+		if baiduResponse.Id != "" {
+			info.UpstreamResponseId = baiduResponse.Id
+		}
 		if baiduResponse.Usage.TotalTokens != 0 {
 			usage.TotalTokens = baiduResponse.Usage.TotalTokens
 			usage.PromptTokens = baiduResponse.Usage.PromptTokens
@@ -136,6 +139,7 @@ func baiduStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 		return true
 	})
 	service.CloseResponseBodyGracefully(resp)
+	service.EnsureCompleteUsage(c, usage, info.GetEstimatePromptTokens(), "", info.UpstreamModelName)
 	return nil, usage
 }
 
@@ -153,6 +157,9 @@ func baiduHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respon
 	if baiduResponse.ErrorMsg != "" {
 		return types.NewError(fmt.Errorf("%s", baiduResponse.ErrorMsg), types.ErrorCodeBadResponseBody), nil
 	}
+	if baiduResponse.Id != "" {
+		info.UpstreamResponseId = baiduResponse.Id
+	}
 	fullTextResponse := responseBaidu2OpenAI(&baiduResponse)
 	jsonResponse, err := json.Marshal(fullTextResponse)
 	if err != nil {
@@ -161,6 +168,7 @@ func baiduHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respon
 	c.Writer.Header().Set("Content-Type", "application/json")
 	c.Writer.WriteHeader(resp.StatusCode)
 	_, err = c.Writer.Write(jsonResponse)
+	service.EnsureCompleteUsage(c, &fullTextResponse.Usage, info.GetEstimatePromptTokens(), "", info.UpstreamModelName)
 	return nil, &fullTextResponse.Usage
 }
 

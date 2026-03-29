@@ -1342,6 +1342,8 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		} else {
 			usage = &dto.Usage{}
 		}
+	} else {
+		service.EnsureCompleteUsage(c, usage, info.GetEstimatePromptTokens(), responseText.String(), info.UpstreamModelName)
 	}
 
 	return usage, nil
@@ -1511,6 +1513,7 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 
 	service.IOCopyBytesGracefully(c, resp, responseBody)
 
+	service.EnsureCompleteUsage(c, &usage, info.GetEstimatePromptTokens(), "", info.UpstreamModelName)
 	return &usage, nil
 }
 

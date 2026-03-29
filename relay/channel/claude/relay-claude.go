@@ -814,15 +814,23 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 }
 
 func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, claudeInfo *ClaudeResponseInfo) {
-	if claudeInfo.Usage.PromptTokens == 0 {
-		//上游出错
+	if claudeInfo.ResponseId != "" {
+		info.UpstreamResponseId = claudeInfo.ResponseId
 	}
 	if claudeInfo.Usage.CompletionTokens == 0 || !claudeInfo.Done {
 		if common.DebugEnabled {
 			common.SysLog("claude response usage is not complete, maybe upstream error")
 		}
-		claudeInfo.Usage = service.ResponseText2Usage(c, claudeInfo.ResponseText.String(), info.UpstreamModelName, claudeInfo.Usage.PromptTokens)
+		estimatedCompletion := service.EstimateTokenByModel(info.UpstreamModelName, claudeInfo.ResponseText.String())
+		if claudeInfo.Usage.CompletionTokens == 0 {
+			claudeInfo.Usage.CompletionTokens = estimatedCompletion
+		}
 	}
+	if claudeInfo.Usage.PromptTokens == 0 {
+		claudeInfo.Usage.PromptTokens = info.GetEstimatePromptTokens()
+		common.SetContextKey(c, constant.ContextKeyLocalCountTokens, true)
+	}
+	claudeInfo.Usage.TotalTokens = claudeInfo.Usage.PromptTokens + claudeInfo.Usage.CompletionTokens
 	if claudeInfo.Usage != nil {
 		claudeInfo.Usage.UsageSemantic = "anthropic"
 	}
@@ -889,6 +897,9 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		return types.WithClaudeError(*claudeError, http.StatusInternalServerError)
 	}
 	maybeMarkClaudeRefusal(c, claudeResponse.StopReason)
+	if claudeResponse.Id != "" {
+		info.UpstreamResponseId = claudeResponse.Id
+	}
 	if claudeInfo.Usage == nil {
 		claudeInfo.Usage = &dto.Usage{}
 	}
@@ -901,6 +912,20 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		claudeInfo.Usage.PromptTokensDetails.CachedCreationTokens = claudeResponse.Usage.CacheCreationInputTokens
 		claudeInfo.Usage.ClaudeCacheCreation5mTokens = claudeResponse.Usage.GetCacheCreation5mTokens()
 		claudeInfo.Usage.ClaudeCacheCreation1hTokens = claudeResponse.Usage.GetCacheCreation1hTokens()
+
+		if claudeInfo.Usage.PromptTokens == 0 || claudeInfo.Usage.CompletionTokens == 0 {
+			var responseText string
+			for _, content := range claudeResponse.Content {
+				if content.Type == "text" {
+					responseText += content.GetText()
+				} else if content.Type == "thinking" && content.Thinking != nil {
+					responseText += *content.Thinking
+				}
+			}
+			service.EnsureCompleteUsage(c, claudeInfo.Usage, info.GetEstimatePromptTokens(), responseText, info.UpstreamModelName)
+			claudeResponse.Usage.InputTokens = claudeInfo.Usage.PromptTokens
+			claudeResponse.Usage.OutputTokens = claudeInfo.Usage.CompletionTokens
+		}
 
 		// 注入缓存信息：如果渠道名包含cache、输入token>=4096、且上游未返回缓存数据
 		if info.ShouldInjectCacheInfo && claudeResponse.Usage.CacheReadInputTokens == 0 {

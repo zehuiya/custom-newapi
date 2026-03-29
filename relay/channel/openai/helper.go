@@ -198,6 +198,10 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 	responseId string, createAt int64, model string, systemFingerprint string,
 	usage *dto.Usage, containStreamUsage bool) {
 
+	if responseId != "" {
+		info.UpstreamResponseId = responseId
+	}
+
 	// 注入缓存信息：如果渠道名包含cache、输入token>=4096、且上游未返回缓存数据
 	if info.ShouldInjectCacheInfo && usage.PromptTokensDetails.CachedTokens == 0 {
 		// 随机抽取50-90%的prompt token作为缓存token

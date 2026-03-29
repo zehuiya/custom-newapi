@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/relay/channel"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -92,6 +93,14 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 		usage, err = xunfeiStreamHandler(c, *a.request, splits[0], splits[1], splits[2])
 	} else {
 		usage, err = xunfeiHandler(c, *a.request, splits[0], splits[1], splits[2])
+	}
+	if u, ok := usage.(*dto.Usage); ok && u != nil {
+		service.EnsureCompleteUsage(c, u, info.GetEstimatePromptTokens(), "", info.UpstreamModelName)
+	}
+	if sid, exists := c.Get("xunfei_sid"); exists {
+		if sidStr, ok := sid.(string); ok && sidStr != "" {
+			info.UpstreamResponseId = sidStr
+		}
 	}
 	return
 }

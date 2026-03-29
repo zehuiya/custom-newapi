@@ -30,6 +30,10 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
+	if responsesResponse.ID != "" {
+		info.UpstreamResponseId = responsesResponse.ID
+	}
+
 	if oaiError := responsesResponse.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
@@ -88,6 +92,9 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			switch streamResponse.Type {
 			case "response.completed":
 				if streamResponse.Response != nil {
+					if streamResponse.Response.ID != "" {
+						info.UpstreamResponseId = streamResponse.Response.ID
+					}
 					if streamResponse.Response.Usage != nil {
 						if streamResponse.Response.Usage.InputTokens != 0 {
 							usage.PromptTokens = streamResponse.Response.Usage.InputTokens
