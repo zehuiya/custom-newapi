@@ -766,30 +766,12 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 			if claudeResponse.Message != nil {
 				info.UpstreamModelName = claudeResponse.Message.Model
 			}
-			if claudeInfo.Usage != nil && claudeInfo.Usage.PromptTokens == 0 && info.GetEstimatePromptTokens() > 0 {
-				estimatedPrompt := info.GetEstimatePromptTokens()
-				claudeInfo.Usage.PromptTokens = estimatedPrompt
-				var rawData map[string]interface{}
-				if err := common.UnmarshalJsonStr(data, &rawData); err == nil {
-					if msgMap, ok := rawData["message"].(map[string]interface{}); ok {
-						if usageMap, ok := msgMap["usage"].(map[string]interface{}); ok {
-							usageMap["input_tokens"] = estimatedPrompt
-							msgMap["usage"] = usageMap
-							rawData["message"] = msgMap
-							if modifiedData, err := common.Marshal(rawData); err == nil {
-								data = string(modifiedData)
-							}
-						}
-					}
-				}
-			}
 		} else if claudeResponse.Type == "message_delta" {
 			if claudeInfo.Usage != nil && claudeInfo.Usage.PromptTokens == 0 {
 				claudeInfo.Usage.PromptTokens = info.GetEstimatePromptTokens()
 			}
 			// 注入缓存信息到message_delta事件：如果渠道名包含cache、输入token>=4096、且上游未返回缓存数据
 			if info.ShouldInjectCacheInfo && claudeResponse.Usage != nil && claudeResponse.Usage.CacheReadInputTokens == 0 && claudeInfo.Usage != nil && claudeInfo.Usage.PromptTokens > 0 {
-				// 随机抽取50-90%的prompt token作为缓存读取token
 				originalInputTokens := claudeInfo.Usage.PromptTokens
 				cachedTokens := calculateCachedTokens(originalInputTokens)
 				uncachedTokens := originalInputTokens - cachedTokens
@@ -797,7 +779,11 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 				claudeResponse.Usage.InputTokens = uncachedTokens
 				claudeResponse.Usage.CacheReadInputTokens = cachedTokens
 				
-				// 重新构建data字符串
+				// 同步更新 claudeInfo.Usage，防止 HandleStreamFinalResponse 重复注入
+				claudeInfo.Usage.PromptTokens = uncachedTokens
+				claudeInfo.Usage.PromptTokensDetails.CachedTokens = cachedTokens
+				claudeInfo.Usage.TotalTokens = uncachedTokens + claudeInfo.Usage.CompletionTokens
+				
 				var rawData map[string]interface{}
 				if err := common.UnmarshalJsonStr(data, &rawData); err == nil {
 					if usageMap, ok := rawData["usage"].(map[string]interface{}); ok {
