@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -24,6 +26,19 @@ import (
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
+
+var claudeRng = rand.New(rand.NewSource(time.Now().UnixNano()))
+
+// calculateCachedTokens 计算缓存token数量：随机抽取50-90%的输入作为缓存
+func calculateCachedTokens(totalPromptTokens int) int {
+	if totalPromptTokens == 0 {
+		return 0
+	}
+	// 生成50-90之间的随机整数百分比
+	percentage := claudeRng.Intn(41) + 50 // 50到90之间的随机数
+	cachedTokens := (totalPromptTokens * percentage) / 100
+	return cachedTokens
+}
 
 const (
 	WebSearchMaxUsesLow    = 1
@@ -753,6 +768,29 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 				info.UpstreamModelName = claudeResponse.Message.Model
 			}
 		} else if claudeResponse.Type == "message_delta" {
+			// 注入缓存信息到message_delta事件：如果渠道名包含cache、输入token>=4096、且上游未返回缓存数据
+			if info.ShouldInjectCacheInfo && claudeResponse.Usage != nil && claudeResponse.Usage.CacheReadInputTokens == 0 && claudeInfo.Usage != nil && claudeInfo.Usage.PromptTokens > 0 {
+				// 随机抽取50-90%的prompt token作为缓存读取token
+				originalInputTokens := claudeInfo.Usage.PromptTokens
+				cachedTokens := calculateCachedTokens(originalInputTokens)
+				uncachedTokens := originalInputTokens - cachedTokens
+				
+				claudeResponse.Usage.InputTokens = uncachedTokens
+				claudeResponse.Usage.CacheReadInputTokens = cachedTokens
+				
+				// 重新构建data字符串
+				var rawData map[string]interface{}
+				if err := common.UnmarshalJsonStr(data, &rawData); err == nil {
+					if usageMap, ok := rawData["usage"].(map[string]interface{}); ok {
+						usageMap["input_tokens"] = uncachedTokens
+						usageMap["cache_read_input_tokens"] = cachedTokens
+						rawData["usage"] = usageMap
+						if modifiedData, err := common.Marshal(rawData); err == nil {
+							data = string(modifiedData)
+						}
+					}
+				}
+			}
 			// 确保 message_delta 的 usage 包含完整的 input_tokens 和 cache 相关字段
 			// 解决 AWS Bedrock 等上游返回的 message_delta 缺少这些字段的问题
 			if !shouldSkipClaudeMessageDeltaUsagePatch(info) {
@@ -787,6 +825,19 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 	}
 	if claudeInfo.Usage != nil {
 		claudeInfo.Usage.UsageSemantic = "anthropic"
+	}
+
+	// 注入缓存信息：如果渠道名包含cache、输入token>=4096、且上游未返回缓存数据
+	if info.ShouldInjectCacheInfo && claudeInfo.Usage.PromptTokensDetails.CachedTokens == 0 && claudeInfo.Usage.PromptTokens >= 4096 {
+		// 随机抽取50-90%的prompt token作为缓存token
+		originalPromptTokens := claudeInfo.Usage.PromptTokens
+		cachedTokens := calculateCachedTokens(originalPromptTokens)
+		uncachedTokens := originalPromptTokens - cachedTokens
+		
+		// 更新Usage：PromptTokens变成未缓存部分，CachedTokens是缓存部分
+		claudeInfo.Usage.PromptTokens = uncachedTokens
+		claudeInfo.Usage.PromptTokensDetails.CachedTokens = cachedTokens
+		claudeInfo.Usage.TotalTokens = uncachedTokens + claudeInfo.Usage.CompletionTokens
 	}
 
 	if info.RelayFormat == types.RelayFormatClaude {
@@ -850,6 +901,23 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		claudeInfo.Usage.PromptTokensDetails.CachedCreationTokens = claudeResponse.Usage.CacheCreationInputTokens
 		claudeInfo.Usage.ClaudeCacheCreation5mTokens = claudeResponse.Usage.GetCacheCreation5mTokens()
 		claudeInfo.Usage.ClaudeCacheCreation1hTokens = claudeResponse.Usage.GetCacheCreation1hTokens()
+
+		// 注入缓存信息：如果渠道名包含cache、输入token>=4096、且上游未返回缓存数据
+		if info.ShouldInjectCacheInfo && claudeResponse.Usage.CacheReadInputTokens == 0 {
+			// 随机抽取50-90%的input token作为缓存读取token
+			originalInputTokens := claudeResponse.Usage.InputTokens
+			cachedTokens := calculateCachedTokens(originalInputTokens)
+			uncachedTokens := originalInputTokens - cachedTokens
+			
+			// 更新响应数据
+			claudeResponse.Usage.CacheReadInputTokens = cachedTokens
+			claudeResponse.Usage.InputTokens = uncachedTokens
+			
+			// 更新Usage：PromptTokens是未缓存的部分，CachedTokens是缓存的部分
+			claudeInfo.Usage.PromptTokens = uncachedTokens
+			claudeInfo.Usage.PromptTokensDetails.CachedTokens = cachedTokens
+			claudeInfo.Usage.TotalTokens = uncachedTokens + claudeResponse.Usage.OutputTokens
+		}
 	}
 	var responseData []byte
 	switch info.RelayFormat {
@@ -861,7 +929,24 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 			return types.NewError(err, types.ErrorCodeBadResponseBody)
 		}
 	case types.RelayFormatClaude:
-		responseData = data
+		// 如果注入了缓存信息，需要修改原始响应数据
+		if info.ShouldInjectCacheInfo && claudeResponse.Usage != nil && claudeResponse.Usage.CacheReadInputTokens > 0 {
+			var rawData map[string]interface{}
+			if err := common.Unmarshal(data, &rawData); err == nil {
+				if usageMap, ok := rawData["usage"].(map[string]interface{}); ok {
+					usageMap["input_tokens"] = claudeResponse.Usage.InputTokens
+					usageMap["cache_read_input_tokens"] = claudeResponse.Usage.CacheReadInputTokens
+					rawData["usage"] = usageMap
+					responseData, _ = common.Marshal(rawData)
+				} else {
+					responseData = data
+				}
+			} else {
+				responseData = data
+			}
+		} else {
+			responseData = data
+		}
 	}
 
 	if claudeResponse.Usage != nil && claudeResponse.Usage.ServerToolUse != nil && claudeResponse.Usage.ServerToolUse.WebSearchRequests > 0 {
