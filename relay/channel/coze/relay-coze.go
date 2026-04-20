@@ -63,6 +63,9 @@ func cozeChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Res
 	if cozeResponse.Code != 0 {
 		return nil, types.NewError(errors.New(cozeResponse.Msg), types.ErrorCodeBadResponseBody)
 	}
+	if convId := c.GetString("coze_conversation_id"); convId != "" {
+		info.UpstreamResponseId = convId
+	}
 	// 从上下文获取 usage
 	var usage dto.Usage
 	usage.PromptTokens = c.GetInt("coze_input_count")
@@ -94,10 +97,14 @@ func cozeChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Res
 	c.Writer.WriteHeader(resp.StatusCode)
 	_, _ = c.Writer.Write(jsonResponse)
 
+	service.EnsureCompleteUsage(c, &usage, info.GetEstimatePromptTokens(), "", info.UpstreamModelName)
 	return &usage, nil
 }
 
 func cozeChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+	if convId := c.GetString("coze_conversation_id"); convId != "" {
+		info.UpstreamResponseId = convId
+	}
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Split(bufio.ScanLines)
 	helper.SetEventStreamHeaders(c)
@@ -144,6 +151,8 @@ func cozeChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *ht
 
 	if usage.TotalTokens == 0 {
 		usage = service.ResponseText2Usage(c, responseText, info.UpstreamModelName, c.GetInt("coze_input_count"))
+	} else {
+		service.EnsureCompleteUsage(c, usage, info.GetEstimatePromptTokens(), responseText, info.UpstreamModelName)
 	}
 
 	return usage, nil

@@ -201,6 +201,9 @@ func zhipuStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 				common.SysLog("error unmarshalling stream response: " + err.Error())
 				return true
 			}
+			if zhipuResponse.RequestId != "" {
+				info.UpstreamResponseId = zhipuResponse.RequestId
+			}
 			response, zhipuUsage := streamMetaResponseZhipu2OpenAI(&zhipuResponse)
 			jsonResponse, err := json.Marshal(response)
 			if err != nil {
@@ -216,6 +219,9 @@ func zhipuStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 		}
 	})
 	service.CloseResponseBodyGracefully(resp)
+	if usage != nil {
+		service.EnsureCompleteUsage(c, usage, info.GetEstimatePromptTokens(), "", info.UpstreamModelName)
+	}
 	return usage, nil
 }
 
@@ -236,6 +242,9 @@ func zhipuHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respon
 			Code:    zhipuResponse.Code,
 		}, resp.StatusCode)
 	}
+	if zhipuResponse.Data.TaskId != "" {
+		info.UpstreamResponseId = zhipuResponse.Data.TaskId
+	}
 	fullTextResponse := responseZhipu2OpenAI(&zhipuResponse)
 	jsonResponse, err := json.Marshal(fullTextResponse)
 	if err != nil {
@@ -244,5 +253,6 @@ func zhipuHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respon
 	c.Writer.Header().Set("Content-Type", "application/json")
 	c.Writer.WriteHeader(resp.StatusCode)
 	_, err = c.Writer.Write(jsonResponse)
+	service.EnsureCompleteUsage(c, &fullTextResponse.Usage, info.GetEstimatePromptTokens(), "", info.UpstreamModelName)
 	return &fullTextResponse.Usage, nil
 }

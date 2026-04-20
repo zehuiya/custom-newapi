@@ -51,6 +51,9 @@ func xAIStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			return
 		}
 
+		if xAIResp.Id != "" {
+			info.UpstreamResponseId = xAIResp.Id
+		}
 		// 把 xAI 的usage转换为 OpenAI 的usage
 		if xAIResp.Usage != nil {
 			containStreamUsage = true
@@ -70,6 +73,8 @@ func xAIStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	if !containStreamUsage {
 		usage = service.ResponseText2Usage(c, responseTextBuilder.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
 		usage.CompletionTokens += toolCount * 7
+	} else {
+		service.EnsureCompleteUsage(c, usage, info.GetEstimatePromptTokens(), responseTextBuilder.String(), info.UpstreamModelName)
 	}
 
 	helper.Done(c)
@@ -89,6 +94,9 @@ func xAIHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 	}
+	if xaiResponse.Id != "" {
+		info.UpstreamResponseId = xaiResponse.Id
+	}
 	if xaiResponse.Usage != nil {
 		xaiResponse.Usage.CompletionTokens = xaiResponse.Usage.TotalTokens - xaiResponse.Usage.PromptTokens
 		xaiResponse.Usage.CompletionTokenDetails.TextTokens = xaiResponse.Usage.CompletionTokens - xaiResponse.Usage.CompletionTokenDetails.ReasoningTokens
@@ -102,5 +110,8 @@ func xAIHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response
 
 	service.IOCopyBytesGracefully(c, resp, encodeJson)
 
+	if xaiResponse.Usage != nil {
+		service.EnsureCompleteUsage(c, xaiResponse.Usage, info.GetEstimatePromptTokens(), "", info.UpstreamModelName)
+	}
 	return xaiResponse.Usage, nil
 }

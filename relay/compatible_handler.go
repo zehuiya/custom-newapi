@@ -65,6 +65,12 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 
 	info.ShouldIncludeUsage = includeUsage
 
+	// 检查是否需要注入缓存信息：渠道名包含cache且输入token>=4096
+	channelName := common.GetContextKeyString(c, constant.ContextKeyChannelName)
+	if strings.Contains(strings.ToLower(channelName), "cache") && info.GetEstimatePromptTokens() >= 4096 {
+		info.ShouldInjectCacheInfo = true
+	}
+
 	adaptor := GetAdaptor(info.ApiType)
 	if adaptor == nil {
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())

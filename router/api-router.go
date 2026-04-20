@@ -46,10 +46,10 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.GET("/oauth/:provider", middleware.CriticalRateLimit(), controller.HandleOAuth)
 		apiRouter.GET("/ratio_config", middleware.CriticalRateLimit(), controller.GetRatioConfig)
 
-		apiRouter.POST("/stripe/webhook", controller.StripeWebhook)
-		apiRouter.POST("/creem/webhook", controller.CreemWebhook)
-		apiRouter.POST("/waffo/webhook", controller.WaffoWebhook)
-		//apiRouter.POST("/waffo-pancake/webhook", controller.WaffoPancakeWebhook)
+		// 这里的webhook支付有bug，先注释
+		// apiRouter.POST("/stripe/webhook", controller.StripeWebhook)
+		// apiRouter.POST("/creem/webhook", controller.CreemWebhook)
+		// apiRouter.POST("/waffo/webhook", controller.WaffoWebhook)
 
 		// Universal secure verification routes
 		apiRouter.POST("/verify", middleware.UserAuth(), middleware.CriticalRateLimit(), controller.UniversalVerify)

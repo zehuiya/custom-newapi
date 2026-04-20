@@ -253,6 +253,8 @@ func difyStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 	helper.Done(c)
 	if usage.TotalTokens == 0 {
 		usage = service.ResponseText2Usage(c, responseText, info.UpstreamModelName, info.GetEstimatePromptTokens())
+	} else {
+		service.EnsureCompleteUsage(c, usage, info.GetEstimatePromptTokens(), responseText, info.UpstreamModelName)
 	}
 	usage.CompletionTokens += nodeToken
 	return usage, nil
@@ -269,6 +271,9 @@ func difyHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respons
 	err = json.Unmarshal(responseBody, &difyResponse)
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+	}
+	if difyResponse.ConversationId != "" {
+		info.UpstreamResponseId = difyResponse.ConversationId
 	}
 	fullTextResponse := dto.OpenAITextResponse{
 		Id:      difyResponse.ConversationId,
@@ -292,5 +297,6 @@ func difyHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respons
 	c.Writer.Header().Set("Content-Type", "application/json")
 	c.Writer.WriteHeader(resp.StatusCode)
 	c.Writer.Write(jsonResponse)
+	service.EnsureCompleteUsage(c, &difyResponse.MetaData.Usage, info.GetEstimatePromptTokens(), difyResponse.Answer, info.UpstreamModelName)
 	return &difyResponse.MetaData.Usage, nil
 }

@@ -1039,6 +1039,14 @@ func buildUsageFromGeminiMetadata(metadata dto.GeminiUsageMetadata, fallbackProm
 			usage.PromptTokensDetails.TextTokens += detail.TokenCount
 		}
 	}
+	for _, detail := range metadata.CandidatesTokensDetails {
+		switch detail.Modality {
+		case "IMAGE":
+			usage.CompletionTokenDetails.ImageTokens += detail.TokenCount
+		case "AUDIO":
+			usage.CompletionTokenDetails.AudioTokens += detail.TokenCount
+		}
+	}
 
 	if usage.TotalTokens > 0 && usage.CompletionTokens <= 0 {
 		usage.CompletionTokens = usage.TotalTokens - usage.PromptTokens
@@ -1311,6 +1319,8 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		} else {
 			usage = &dto.Usage{}
 		}
+	} else {
+		service.EnsureCompleteUsage(c, usage, info.GetEstimatePromptTokens(), responseText.String(), info.UpstreamModelName)
 	}
 
 	return usage, nil
@@ -1480,6 +1490,7 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 
 	service.IOCopyBytesGracefully(c, resp, responseBody)
 
+	service.EnsureCompleteUsage(c, &usage, info.GetEstimatePromptTokens(), "", info.UpstreamModelName)
 	return &usage, nil
 }
 

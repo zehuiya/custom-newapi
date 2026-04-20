@@ -166,9 +166,7 @@ func cohereStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			return false
 		}
 	})
-	if usage.PromptTokens == 0 {
-		usage = service.ResponseText2Usage(c, responseText, info.UpstreamModelName, info.GetEstimatePromptTokens())
-	}
+	service.EnsureCompleteUsage(c, usage, info.GetEstimatePromptTokens(), responseText, info.UpstreamModelName)
 	return usage, nil
 }
 
@@ -189,6 +187,9 @@ func cohereHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 	usage.CompletionTokens = cohereResp.Meta.BilledUnits.OutputTokens
 	usage.TotalTokens = cohereResp.Meta.BilledUnits.InputTokens + cohereResp.Meta.BilledUnits.OutputTokens
 
+	if cohereResp.ResponseId != "" {
+		info.UpstreamResponseId = cohereResp.ResponseId
+	}
 	var openaiResp dto.TextResponse
 	openaiResp.Id = cohereResp.ResponseId
 	openaiResp.Created = createdTime
@@ -211,6 +212,7 @@ func cohereHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 	c.Writer.Header().Set("Content-Type", "application/json")
 	c.Writer.WriteHeader(resp.StatusCode)
 	_, _ = c.Writer.Write(jsonResponse)
+	service.EnsureCompleteUsage(c, &usage, info.GetEstimatePromptTokens(), cohereResp.Text, info.UpstreamModelName)
 	return &usage, nil
 }
 

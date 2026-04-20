@@ -19,7 +19,6 @@ tiktoken_cache
 .gocache
 .gomodcache/
 .cache
-web/bun.lock
 plans
 .claude
 
@@ -29,5 +28,6 @@ data/
 .gomodcache/
 .gocache-temp
 .gopath
-
+.test
 token_estimator_test.go
+skills-lock.json

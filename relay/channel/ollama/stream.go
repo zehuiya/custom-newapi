@@ -177,6 +177,7 @@ func ollamaStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	if err := scanner.Err(); err != nil && err != io.EOF {
 		logger.LogError(c, "ollama stream scan error: "+err.Error())
 	}
+	service.EnsureCompleteUsage(c, usage, info.GetEstimatePromptTokens(), "", info.UpstreamModelName)
 	return usage, nil
 }
 
@@ -289,6 +290,7 @@ func ollamaChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 	}
 	out, _ := common.Marshal(full)
 	service.IOCopyBytesGracefully(c, resp, out)
+	service.EnsureCompleteUsage(c, usage, info.GetEstimatePromptTokens(), content, info.UpstreamModelName)
 	return usage, nil
 }
 
