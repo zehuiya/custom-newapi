@@ -6,10 +6,10 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
-
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
@@ -115,8 +115,109 @@ func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) {
 
 // ValidateRequestAndSetAction parses body, validates fields and sets default action.
 func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.TaskError) {
-	// Accept only POST /v1/video/generations as "generate" action.
-	return relaycommon.ValidateBasicTaskRequest(c, info, constant.TaskActionGenerate)
+	// Doubao 视频生成 API 使用 content 数组格式，需要自定义验证逻辑
+	// 不能使用通用的 ValidateBasicTaskRequest（它要求 prompt 字段）
+	
+	var payload requestPayload
+	if err := common.UnmarshalBodyReusable(c, &payload); err != nil {
+		return &dto.TaskError{
+			Code:       "invalid_request",
+			Message:    "failed to parse request body",
+			StatusCode: http.StatusBadRequest,
+			LocalError: true,
+		}
+	}
+
+	// 验证必填字段
+	if payload.Model == "" {
+		return &dto.TaskError{
+			Code:       "invalid_request",
+			Message:    "model is required",
+			StatusCode: http.StatusBadRequest,
+			LocalError: true,
+		}
+	}
+
+	if len(payload.Content) == 0 {
+		return &dto.TaskError{
+			Code:       "invalid_request",
+			Message:    "content is required",
+			StatusCode: http.StatusBadRequest,
+			LocalError: true,
+		}
+	}
+
+	// 验证 content 中至少有一个文本类型（提示词）
+	hasText := false
+	for _, item := range payload.Content {
+		if item.Type == "text" && strings.TrimSpace(item.Text) != "" {
+			hasText = true
+			break
+		}
+	}
+	if !hasText {
+		return &dto.TaskError{
+			Code:       "invalid_request",
+			Message:    "content must contain at least one text item with non-empty text",
+			StatusCode: http.StatusBadRequest,
+			LocalError: true,
+		}
+	}
+
+	// 构造兼容的 TaskSubmitReq 对象（用于后续计费逻辑）
+	req := relaycommon.TaskSubmitReq{
+		Model:    payload.Model,
+		Metadata: buildMetadataFromPayload(&payload),
+	}
+
+	// 提取第一个文本作为 Prompt（用于兼容通用逻辑）
+	for _, item := range payload.Content {
+		if item.Type == "text" {
+			req.Prompt = item.Text
+			break
+		}
+	}
+
+	// 存储到 context
+	c.Set("task_request", req)
+	info.Action = constant.TaskActionGenerate
+	return nil
+}
+
+// buildMetadataFromPayload 将 payload 转换为 metadata 格式，供计费逻辑使用
+func buildMetadataFromPayload(payload *requestPayload) map[string]interface{} {
+	metadata := make(map[string]interface{})
+
+	// 将整个 content 数组存入 metadata
+	metadata["content"] = payload.Content
+
+	// 其他参数
+	if payload.Resolution != "" {
+		metadata["resolution"] = payload.Resolution
+	}
+	if payload.Ratio != "" {
+		metadata["ratio"] = payload.Ratio
+	}
+	if payload.Duration != nil {
+		metadata["duration"] = int(*payload.Duration)
+	}
+	if payload.GenerateAudio != nil {
+		metadata["generate_audio"] = bool(*payload.GenerateAudio)
+	}
+	if payload.Seed != nil {
+		metadata["seed"] = int(*payload.Seed)
+	}
+	if payload.CameraFixed != nil {
+		metadata["camera_fixed"] = bool(*payload.CameraFixed)
+	}
+	if payload.Watermark != nil {
+		metadata["watermark"] = bool(*payload.Watermark)
+	}
+	if payload.ServiceTier != "" {
+		metadata["service_tier"] = payload.ServiceTier
+	}
+
+	return metadata
 }
 
 // BuildRequestURL constructs the upstream URL.
@@ -132,18 +233,122 @@ func (a *TaskAdaptor) BuildRequestHeader(_ *gin.Context, req *http.Request, _ *r
 	return nil
 }
 
-// EstimateBilling 检测请求 metadata 中是否包含视频输入，返回视频折扣 OtherRatio。
+// EstimateBilling 根据模型和请求参数（分辨率、视频输入、音频）计算 OtherRatios。
+// 管理员应为每个模型配置"基准场景"的倍率（详见 constants.go 中的 BaseScenario），
+// 系统会根据实际请求自动调整倍率。
 func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInfo) map[string]float64 {
 	req, err := relaycommon.GetTaskRequest(c)
 	if err != nil {
 		return nil
 	}
-	if hasVideoInMetadata(req.Metadata) {
-		if ratio, ok := GetVideoInputRatio(info.OriginModelName); ok {
-			return map[string]float64{"video_input": ratio}
+
+	// 获取模型的计费配置
+	config, ok := GetSeedanceBillingConfig(info.OriginModelName)
+	if !ok {
+		// 模型不在配置中，使用默认计费（无 OtherRatios）
+		return nil
+	}
+
+	otherRatios := make(map[string]float64)
+
+	// 1. 分辨率差异化计费
+	if config.SupportResolution {
+		resolution := parseResolution(req)
+		if resRatio, exists := config.ResolutionRatios[resolution]; exists && resRatio != 1.0 {
+			otherRatios["resolution"] = resRatio
 		}
 	}
-	return nil
+
+	// 2. 视频输入差异化计费
+	if config.SupportVideoInput {
+		hasVideo := hasVideoInMetadata(req.Metadata)
+		if hasVideo && config.VideoInputRatio != 0 && config.VideoInputRatio != 1.0 {
+			otherRatios["video_input"] = config.VideoInputRatio
+		}
+	}
+
+	// 3. 音频差异化计费（仅 1.5 pro）
+	if config.SupportAudio {
+		hasAudio := parseGenerateAudio(req)
+		// 基准是"有声"，无声时打折
+		if !hasAudio && config.NoAudioRatio != 0 && config.NoAudioRatio != 1.0 {
+			otherRatios["audio"] = config.NoAudioRatio
+		}
+	}
+
+	// 如果没有任何差异化，返回 nil
+	if len(otherRatios) == 0 {
+		return nil
+	}
+
+	return otherRatios
+}
+
+// parseResolution 从请求中提取分辨率参数
+// 优先级：metadata.resolution > req.Size
+// 返回规范化的值：480p / 720p / 1080p
+func parseResolution(req relaycommon.TaskSubmitReq) string {
+	// 1. 从 metadata.resolution 读取
+	if req.Metadata != nil {
+		if res, ok := req.Metadata["resolution"].(string); ok && res != "" {
+			return normalizeResolution(res)
+		}
+	}
+
+	// 2. 从 req.Size 读取（可能是 "1920x1080" 格式）
+	if req.Size != "" {
+		return sizeToResolution(req.Size)
+	}
+
+	// 3. 默认 720p
+	return "720p"
+}
+
+// normalizeResolution 规范化分辨率字符串（统一为小写 + p）
+func normalizeResolution(res string) string {
+	// 转小写
+	res = strings.ToLower(res)
+	// 确保有 "p" 后缀
+	if !strings.Contains(res, "p") {
+		res = res + "p"
+	}
+	return res
+}
+
+// sizeToResolution 将 "WxH" 格式转换为分辨率标签
+func sizeToResolution(size string) string {
+	// 提取高度数字，判断分辨率等级
+	// 例如：1920x1080 → 1080p，1280x720 → 720p
+	parts := strings.Split(strings.ToLower(size), "x")
+	if len(parts) != 2 {
+		return "720p" // 默认
+	}
+
+	heightStr := strings.TrimSpace(parts[1])
+	var height int
+	if _, err := fmt.Sscanf(heightStr, "%d", &height); err != nil {
+		return "720p"
+	}
+
+	// 根据高度判断分辨率等级
+	if height >= 1080 {
+		return "1080p"
+	}
+	if height >= 720 {
+		return "720p"
+	}
+	return "480p"
+}
+
+// parseGenerateAudio 从请求中提取 generate_audio 参数
+func parseGenerateAudio(req relaycommon.TaskSubmitReq) bool {
+	if req.Metadata == nil {
+		return false
+	}
+	if audio, ok := req.Metadata["generate_audio"].(bool); ok {
+		return audio
+	}
+	return false
 }
 
 // hasVideoInMetadata 直接检查 metadata 的 content 数组是否包含 video_url 条目，
