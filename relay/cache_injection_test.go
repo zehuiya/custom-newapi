@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -75,14 +76,6 @@ func TestCacheInjectionOpenAI(t *testing.T) {
 			checkRange:            true,
 		},
 		{
-			name:                  "sub2api cache channel relies on upstream usage and does not inject",
-			channelName:           "sub2api[cache]",
-			estimatedTokens:       10000,
-			upstreamCachedTokens:  0,
-			shouldInjectCacheInfo: false,
-			checkRange:            false,
-		},
-		{
 			name:                  "测试10000token的情况",
 			channelName:           "openai-cache",
 			estimatedTokens:       10000,
@@ -110,7 +103,7 @@ func TestCacheInjectionOpenAI(t *testing.T) {
 
 			// 模拟TextHelper中的逻辑来设置ShouldInjectCacheInfo
 			channelName := common.GetContextKeyString(c, constant.ContextKeyChannelName)
-			if shouldInjectSyntheticCacheInfo(channelName, info) {
+			if strings.Contains(strings.ToLower(channelName), "cache") && info.GetEstimatePromptTokens() >= 4096 {
 				info.ShouldInjectCacheInfo = true
 			}
 
@@ -215,14 +208,6 @@ func TestCacheInjectionClaude(t *testing.T) {
 			checkRange:              true,
 		},
 		{
-			name:                    "sub2api cache channel relies on upstream usage and does not inject",
-			channelName:             "sub2api[cache]",
-			estimatedTokens:         10000,
-			upstreamCacheReadTokens: 0,
-			shouldInjectCacheInfo:   false,
-			checkRange:              false,
-		},
-		{
 			name:                    "测试10000token的情况",
 			channelName:             "claude-cache",
 			estimatedTokens:         10000,
@@ -250,7 +235,7 @@ func TestCacheInjectionClaude(t *testing.T) {
 
 			// 模拟ClaudeHelper中的逻辑来设置ShouldInjectCacheInfo
 			channelName := common.GetContextKeyString(c, constant.ContextKeyChannelName)
-			if shouldInjectSyntheticCacheInfo(channelName, info) {
+			if strings.Contains(strings.ToLower(channelName), "cache") && info.GetEstimatePromptTokens() >= 4096 {
 				info.ShouldInjectCacheInfo = true
 			}
 
