@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/dto"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/stretchr/testify/require"
 )
 
@@ -273,6 +274,80 @@ func TestBuildOpenAIStyleUsageFromClaudeUsageDefaultsAggregateCacheCreationTo5m(
 
 	require.Equal(t, 50, openAIUsage.ClaudeCacheCreation5mTokens)
 	require.Equal(t, 0, openAIUsage.ClaudeCacheCreation1hTokens)
+}
+
+func TestNormalizeAnthropicInclusiveCacheUsageForSub2APIChannel(t *testing.T) {
+	usage := &dto.Usage{
+		PromptTokens:     10088,
+		CompletionTokens: 1,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens: 9984,
+		},
+		UsageSemantic: "anthropic",
+	}
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelName: "sub2api-deepseek",
+		},
+	}
+
+	require.True(t, normalizeAnthropicInclusiveCacheUsage(info, usage))
+	require.Equal(t, 104, usage.PromptTokens)
+	require.Equal(t, 105, usage.TotalTokens)
+	require.Equal(t, normalizedAnthropicInclusiveCacheUsageSource, usage.UsageSource)
+
+	openAIUsage := buildOpenAIStyleUsageFromClaudeUsage(usage)
+	require.Equal(t, 10088, openAIUsage.PromptTokens)
+	require.Equal(t, 10088, openAIUsage.InputTokens)
+	require.Equal(t, 10089, openAIUsage.TotalTokens)
+	require.Equal(t, 9984, openAIUsage.PromptTokensDetails.CachedTokens)
+}
+
+func TestNormalizeAnthropicInclusiveCacheUsageForExplicitChannelSetting(t *testing.T) {
+	usage := &dto.Usage{
+		PromptTokens:     10088,
+		CompletionTokens: 1,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens: 9984,
+		},
+		UsageSemantic: "anthropic",
+	}
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelOtherSettings: dto.ChannelOtherSettings{
+				ClaudeInputTokensIncludesCache: true,
+			},
+		},
+	}
+
+	require.True(t, normalizeAnthropicInclusiveCacheUsage(info, usage))
+	require.Equal(t, 104, usage.PromptTokens)
+	require.Equal(t, 105, usage.TotalTokens)
+}
+
+func TestNormalizeAnthropicInclusiveCacheUsageKeepsNormalAnthropicChannel(t *testing.T) {
+	usage := &dto.Usage{
+		PromptTokens:     104,
+		CompletionTokens: 1,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens: 9984,
+		},
+		UsageSemantic: "anthropic",
+	}
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelName: "anthropic",
+		},
+	}
+
+	require.False(t, normalizeAnthropicInclusiveCacheUsage(info, usage))
+	require.Equal(t, 104, usage.PromptTokens)
+
+	openAIUsage := buildOpenAIStyleUsageFromClaudeUsage(usage)
+	require.Equal(t, 10088, openAIUsage.PromptTokens)
+	require.Equal(t, 10088, openAIUsage.InputTokens)
+	require.Equal(t, 10089, openAIUsage.TotalTokens)
+	require.Equal(t, 9984, openAIUsage.PromptTokensDetails.CachedTokens)
 }
 
 func TestRequestOpenAI2ClaudeMessage_IgnoresUnsupportedFileContent(t *testing.T) {

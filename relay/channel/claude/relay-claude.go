@@ -421,7 +421,7 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 				if message.ToolCalls != nil {
 					for _, toolCall := range message.ParseToolCalls() {
 						inputObj := make(map[string]any)
-						if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &inputObj); err != nil {
+						if err := common.Unmarshal([]byte(toolCall.Function.Arguments), &inputObj); err != nil {
 							common.SysLog("tool call function arguments is not a map[string]any: " + fmt.Sprintf("%v", toolCall.Function.Arguments))
 							continue
 						}
@@ -555,7 +555,7 @@ func ResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.OpenAITextRe
 	for _, message := range claudeResponse.Content {
 		switch message.Type {
 		case "tool_use":
-			args, _ := json.Marshal(message.Input)
+			args, _ := common.Marshal(message.Input)
 			tools = append(tools, dto.ToolCallResponse{
 				ID:   message.Id,
 				Type: "function", // compatible with other OpenAI derivative applications
@@ -615,6 +615,34 @@ func cacheCreationTokensForOpenAIUsage(usage *dto.Usage) int {
 		return usage.PromptTokensDetails.CachedCreationTokens
 	}
 	return splitCacheCreationTokens
+}
+
+const normalizedAnthropicInclusiveCacheUsageSource = "anthropic_inclusive_cache_normalized"
+
+func shouldNormalizeAnthropicInclusiveCacheUsage(info *relaycommon.RelayInfo) bool {
+	if info == nil || info.ChannelMeta == nil {
+		return false
+	}
+	if info.ChannelOtherSettings.ClaudeInputTokensIncludesCache {
+		return true
+	}
+	return strings.Contains(strings.ToLower(info.ChannelName), "sub2api")
+}
+
+func normalizeAnthropicInclusiveCacheUsage(info *relaycommon.RelayInfo, usage *dto.Usage) bool {
+	if usage == nil || usage.UsageSource == normalizedAnthropicInclusiveCacheUsageSource || !shouldNormalizeAnthropicInclusiveCacheUsage(info) {
+		return false
+	}
+	inclusiveCacheTokens := usage.PromptTokensDetails.CachedTokens + cacheCreationTokensForOpenAIUsage(usage)
+	if inclusiveCacheTokens <= 0 || usage.PromptTokens < inclusiveCacheTokens {
+		return false
+	}
+	usage.PromptTokens -= inclusiveCacheTokens
+	usage.InputTokens = usage.PromptTokens
+	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	usage.UsageSemantic = "anthropic"
+	usage.UsageSource = normalizedAnthropicInclusiveCacheUsageSource
+	return true
 }
 
 func buildOpenAIStyleUsageFromClaudeUsage(usage *dto.Usage) dto.Usage {
@@ -828,15 +856,15 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 				originalInputTokens := claudeInfo.Usage.PromptTokens
 				cachedTokens := calculateCachedTokens(originalInputTokens)
 				uncachedTokens := originalInputTokens - cachedTokens
-				
+
 				claudeResponse.Usage.InputTokens = uncachedTokens
 				claudeResponse.Usage.CacheReadInputTokens = cachedTokens
-				
+
 				// 同步更新 claudeInfo.Usage，防止 HandleStreamFinalResponse 重复注入
 				claudeInfo.Usage.PromptTokens = uncachedTokens
 				claudeInfo.Usage.PromptTokensDetails.CachedTokens = cachedTokens
 				claudeInfo.Usage.TotalTokens = uncachedTokens + claudeInfo.Usage.CompletionTokens
-				
+
 				var rawData map[string]interface{}
 				if err := common.UnmarshalJsonStr(data, &rawData); err == nil {
 					if usageMap, ok := rawData["usage"].(map[string]interface{}); ok {
@@ -897,6 +925,7 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 	if claudeInfo.Usage != nil {
 		claudeInfo.Usage.UsageSemantic = "anthropic"
 	}
+	normalizeAnthropicInclusiveCacheUsage(info, claudeInfo.Usage)
 
 	// 注入缓存信息：如果渠道名包含cache、输入token>=4096、且上游未返回缓存数据
 	if info.ShouldInjectCacheInfo && claudeInfo.Usage.PromptTokensDetails.CachedTokens == 0 && claudeInfo.Usage.PromptTokens >= 4096 {
@@ -904,7 +933,7 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 		originalPromptTokens := claudeInfo.Usage.PromptTokens
 		cachedTokens := calculateCachedTokens(originalPromptTokens)
 		uncachedTokens := originalPromptTokens - cachedTokens
-		
+
 		// 更新Usage：PromptTokens变成未缓存部分，CachedTokens是缓存部分
 		claudeInfo.Usage.PromptTokens = uncachedTokens
 		claudeInfo.Usage.PromptTokensDetails.CachedTokens = cachedTokens
@@ -988,6 +1017,10 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 			claudeResponse.Usage.InputTokens = claudeInfo.Usage.PromptTokens
 			claudeResponse.Usage.OutputTokens = claudeInfo.Usage.CompletionTokens
 		}
+		normalizedInclusiveUsage := normalizeAnthropicInclusiveCacheUsage(info, claudeInfo.Usage)
+		if normalizedInclusiveUsage {
+			claudeResponse.Usage.InputTokens = claudeInfo.Usage.PromptTokens
+		}
 
 		// 注入缓存信息：如果渠道名包含cache、输入token>=4096、且上游未返回缓存数据
 		if info.ShouldInjectCacheInfo && claudeResponse.Usage.CacheReadInputTokens == 0 {
@@ -995,11 +1028,11 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 			originalInputTokens := claudeResponse.Usage.InputTokens
 			cachedTokens := calculateCachedTokens(originalInputTokens)
 			uncachedTokens := originalInputTokens - cachedTokens
-			
+
 			// 更新响应数据
 			claudeResponse.Usage.CacheReadInputTokens = cachedTokens
 			claudeResponse.Usage.InputTokens = uncachedTokens
-			
+
 			// 更新Usage：PromptTokens是未缓存的部分，CachedTokens是缓存的部分
 			claudeInfo.Usage.PromptTokens = uncachedTokens
 			claudeInfo.Usage.PromptTokensDetails.CachedTokens = cachedTokens
@@ -1011,13 +1044,13 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	case types.RelayFormatOpenAI:
 		openaiResponse := ResponseClaude2OpenAI(&claudeResponse)
 		openaiResponse.Usage = buildOpenAIStyleUsageFromClaudeUsage(claudeInfo.Usage)
-		responseData, err = json.Marshal(openaiResponse)
+		responseData, err = common.Marshal(openaiResponse)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeBadResponseBody)
 		}
 	case types.RelayFormatClaude:
 		// 如果注入了缓存信息，需要修改原始响应数据
-		if info.ShouldInjectCacheInfo && claudeResponse.Usage != nil && claudeResponse.Usage.CacheReadInputTokens > 0 {
+		if claudeResponse.Usage != nil && (claudeInfo.Usage.UsageSource == normalizedAnthropicInclusiveCacheUsageSource || info.ShouldInjectCacheInfo && claudeResponse.Usage.CacheReadInputTokens > 0) {
 			var rawData map[string]interface{}
 			if err := common.Unmarshal(data, &rawData); err == nil {
 				if usageMap, ok := rawData["usage"].(map[string]interface{}); ok {
