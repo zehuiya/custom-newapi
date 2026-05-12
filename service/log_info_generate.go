@@ -80,9 +80,31 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	appendRequestConversionChain(relayInfo, other)
 	appendFinalRequestFormat(relayInfo, other)
 	appendBillingInfo(relayInfo, other)
+	appendOtherRatioInfo(relayInfo, other)
 	appendParamOverrideInfo(relayInfo, other)
 	appendStreamStatus(relayInfo, other)
 	return other
+}
+
+func appendOtherRatioInfo(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
+	if relayInfo == nil || other == nil || len(relayInfo.PriceData.OtherRatios) == 0 {
+		return
+	}
+	otherRatios := make(map[string]float64, len(relayInfo.PriceData.OtherRatios))
+	effectiveModelPrice := relayInfo.PriceData.ModelPrice
+	for key, ratio := range relayInfo.PriceData.OtherRatios {
+		otherRatios[key] = ratio
+		if key == types.OtherRatioImagePrice {
+			other[types.OtherRatioImagePrice] = ratio
+		}
+		if ratio > 0 {
+			effectiveModelPrice *= ratio
+		}
+	}
+	other["other_ratios"] = otherRatios
+	if relayInfo.PriceData.UsePrice && relayInfo.PriceData.ModelPrice > 0 && effectiveModelPrice != relayInfo.PriceData.ModelPrice {
+		other["effective_model_price"] = effectiveModelPrice
+	}
 }
 
 func appendParamOverrideInfo(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {

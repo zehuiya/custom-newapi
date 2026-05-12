@@ -113,10 +113,11 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		ratio := modelRatio * groupRatioInfo.GroupRatio
 		preConsumedQuota = int(float64(preConsumedTokens) * ratio)
 	} else {
-		if meta.ImagePriceRatio != 0 {
-			modelPrice = modelPrice * meta.ImagePriceRatio
+		imagePriceRatio := 1.0
+		if meta != nil && meta.ImagePriceRatio != 0 {
+			imagePriceRatio = meta.ImagePriceRatio
 		}
-		preConsumedQuota = int(modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
+		preConsumedQuota = int(modelPrice * imagePriceRatio * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
 	}
 
 	// check if free model pre-consume is disabled
@@ -153,6 +154,9 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		CacheCreation5mRatio: cacheCreationRatio5m,
 		CacheCreation1hRatio: cacheCreationRatio1h,
 		QuotaToPreConsume:    preConsumedQuota,
+	}
+	if usePrice && meta != nil && meta.ImagePriceRatio != 0 {
+		priceData.AddOtherRatio(types.OtherRatioImagePrice, meta.ImagePriceRatio)
 	}
 
 	if common.DebugEnabled {

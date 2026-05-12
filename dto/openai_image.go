@@ -128,23 +128,42 @@ func (i *ImageRequest) GetTokenCountMeta() *types.TokenCountMeta {
 	var sizeRatio = 1.0
 	var qualityRatio = 1.0
 
-	if strings.HasPrefix(i.Model, "dall-e") {
+	modelName := strings.ToLower(strings.TrimSpace(i.Model))
+	size := strings.ToLower(strings.TrimSpace(i.Size))
+	quality := strings.ToLower(strings.TrimSpace(i.Quality))
+
+	if strings.HasPrefix(modelName, "dall-e") {
 		// Size
-		if i.Size == "256x256" {
+		if size == "256x256" {
 			sizeRatio = 0.4
-		} else if i.Size == "512x512" {
+		} else if size == "512x512" {
 			sizeRatio = 0.45
-		} else if i.Size == "1024x1024" {
+		} else if size == "1024x1024" {
 			sizeRatio = 1
-		} else if i.Size == "1024x1792" || i.Size == "1792x1024" {
+		} else if size == "1024x1792" || size == "1792x1024" {
 			sizeRatio = 2
 		}
 
-		if i.Model == "dall-e-3" && i.Quality == "hd" {
+		if modelName == "dall-e-3" && quality == "hd" {
 			qualityRatio = 2.0
-			if i.Size == "1024x1792" || i.Size == "1792x1024" {
+			if size == "1024x1792" || size == "1792x1024" {
 				qualityRatio = 1.5
 			}
+		}
+	} else if strings.Contains(modelName, "qwen-image-2512") {
+		if size == "" || size == "auto" || size == "1024x1024" {
+			sizeRatio = 1
+		} else if size == "512x512" {
+			sizeRatio = 0.5
+		}
+
+		switch quality {
+		case "", "auto":
+			qualityRatio = 1
+		case "low":
+			qualityRatio = 0.8125
+		case "high":
+			qualityRatio = 1.609375
 		}
 	}
 

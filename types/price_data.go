@@ -2,6 +2,10 @@ package types
 
 import "fmt"
 
+const (
+	OtherRatioImagePrice = "image_price_ratio"
+)
+
 type GroupRatioInfo struct {
 	GroupRatio        float64
 	GroupSpecialRatio float64

@@ -97,6 +97,17 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 			if httpResp.StatusCode == http.StatusCreated && info.ApiType == constant.APITypeReplicate {
 				// replicate channel returns 201 Created when using Prefer: wait, treat it as success.
 				httpResp.StatusCode = http.StatusOK
+			} else if info.ApiType == constant.APITypeRunware {
+				_, newAPIError = adaptor.DoResponse(c, httpResp, info)
+				service.ResetStatusCode(newAPIError, statusCodeMappingStr)
+				if newAPIError == nil {
+					return types.NewErrorWithStatusCode(
+						fmt.Errorf("runware upstream returned status code %d without error body", httpResp.StatusCode),
+						types.ErrorCodeBadResponseStatusCode,
+						httpResp.StatusCode,
+					)
+				}
+				return newAPIError
 			} else {
 				newAPIError = service.RelayErrorHandler(c.Request.Context(), httpResp, false)
 				// reset status code 重置状态码
@@ -133,9 +144,9 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		usage.(*dto.Usage).PromptTokens = 1
 	}
 
-	quality := "standard"
-	if request.Quality == "hd" {
-		quality = "hd"
+	quality := request.Quality
+	if quality == "" {
+		quality = "standard"
 	}
 
 	var logContent []string
@@ -148,6 +159,15 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 	}
 	if imageN > 0 {
 		logContent = append(logContent, fmt.Sprintf("生成数量 %d", imageN))
+	}
+	if info.PriceData.UsePrice && info.PriceData.ModelPrice > 0 {
+		logContent = append(logContent, fmt.Sprintf("基础价格 $%.6f", info.PriceData.ModelPrice))
+		imagePriceRatio := 1.0
+		if ratio, ok := info.PriceData.OtherRatios[types.OtherRatioImagePrice]; ok {
+			imagePriceRatio = ratio
+		}
+		logContent = append(logContent, fmt.Sprintf("参数倍率 %.6gx", imagePriceRatio))
+		logContent = append(logContent, fmt.Sprintf("折算价格 $%.6f", info.PriceData.ModelPrice*imagePriceRatio))
 	}
 
 	service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), logContent)
