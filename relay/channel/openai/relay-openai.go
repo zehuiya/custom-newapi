@@ -189,11 +189,11 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		originalPromptTokens := usage.PromptTokens
 		cachedTokens := calculateCachedTokens(originalPromptTokens)
 		uncachedTokens := originalPromptTokens - cachedTokens
-		
+
 		// 更新usage对象
 		usage.PromptTokens = uncachedTokens
 		usage.PromptTokensDetails.CachedTokens = cachedTokens
-		
+
 		// 修改lastStreamData中的JSON
 		var lastStreamResponse dto.ChatCompletionsStreamResponse
 		if err := common.Unmarshal(common.StringToByteSlice(lastStreamData), &lastStreamResponse); err == nil {
@@ -228,6 +228,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	applyUsagePostProcessing(info, usage, common.StringToByteSlice(lastStreamData))
 
 	HandleFinalResponse(c, info, lastStreamData, responseId, createAt, model, systemFingerprint, usage, containStreamUsage)
+	markOpenAIUsageSemantic(usage)
 
 	return usage, nil
 }
@@ -307,7 +308,7 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 		originalPromptTokens := simpleResponse.Usage.PromptTokens
 		cachedTokens := calculateCachedTokens(originalPromptTokens)
 		uncachedTokens := originalPromptTokens - cachedTokens
-		
+
 		// 更新usage：prompt_tokens变成未缓存的部分，cached_tokens是缓存的部分
 		simpleResponse.Usage.PromptTokens = uncachedTokens
 		simpleResponse.Usage.PromptTokensDetails.CachedTokens = cachedTokens
@@ -353,6 +354,7 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 	}
 
 	service.IOCopyBytesGracefully(c, resp, responseBody)
+	markOpenAIUsageSemantic(&simpleResponse.Usage)
 
 	return &simpleResponse.Usage, nil
 }
@@ -636,17 +638,18 @@ func OpenaiHandlerWithUsage(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 	// because the upstream has already consumed resources and returned content
 	// We should still perform billing even if parsing fails
 	// format
-	if usageResp.InputTokens > 0 {
-		usageResp.PromptTokens += usageResp.InputTokens
+	if usageResp.InputTokens > 0 && usageResp.PromptTokens == 0 {
+		usageResp.PromptTokens = usageResp.InputTokens
 	}
-	if usageResp.OutputTokens > 0 {
-		usageResp.CompletionTokens += usageResp.OutputTokens
+	if usageResp.OutputTokens > 0 && usageResp.CompletionTokens == 0 {
+		usageResp.CompletionTokens = usageResp.OutputTokens
 	}
 	if usageResp.InputTokensDetails != nil {
 		usageResp.PromptTokensDetails.ImageTokens += usageResp.InputTokensDetails.ImageTokens
 		usageResp.PromptTokensDetails.TextTokens += usageResp.InputTokensDetails.TextTokens
 	}
 	applyUsagePostProcessing(info, &usageResp.Usage, responseBody)
+	markOpenAIUsageSemantic(&usageResp.Usage)
 	return &usageResp.Usage, nil
 }
 

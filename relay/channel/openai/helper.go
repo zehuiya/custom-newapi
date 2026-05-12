@@ -208,7 +208,7 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 		originalPromptTokens := usage.PromptTokens
 		cachedTokens := calculateCachedTokens(originalPromptTokens)
 		uncachedTokens := originalPromptTokens - cachedTokens
-		
+
 		// 更新usage：prompt_tokens变成未缓存的部分，cached_tokens是缓存的部分
 		usage.PromptTokens = uncachedTokens
 		usage.PromptTokensDetails.CachedTokens = cachedTokens
@@ -266,6 +266,12 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 		// 发送最终的 Gemini 响应
 		c.Render(-1, common.CustomEvent{Data: "data: " + string(geminiResponseStr)})
 		_ = helper.FlushWriter(c)
+	}
+}
+
+func markOpenAIUsageSemantic(usage *dto.Usage) {
+	if usage != nil && usage.UsageSemantic == "" {
+		usage.UsageSemantic = "openai"
 	}
 }
 

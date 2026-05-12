@@ -40,5 +40,6 @@ func OaiResponsesCompactionHandler(c *gin.Context, resp *http.Response) (*dto.Us
 		}
 	}
 
+	markOpenAIUsageSemantic(&usage)
 	return &usage, nil
 }

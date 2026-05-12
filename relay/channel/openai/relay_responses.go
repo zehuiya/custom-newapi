@@ -58,6 +58,7 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		}
 	}
 	if info == nil || info.ResponsesUsageInfo == nil || info.ResponsesUsageInfo.BuiltInTools == nil {
+		markOpenAIUsageSemantic(&usage)
 		return &usage, nil
 	}
 	// 解析 Tools 用量
@@ -69,6 +70,7 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		}
 		buildToolinfo.CallCount++
 	}
+	markOpenAIUsageSemantic(&usage)
 	return &usage, nil
 }
 
@@ -151,5 +153,6 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 
 	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 
+	markOpenAIUsageSemantic(usage)
 	return usage, nil
 }

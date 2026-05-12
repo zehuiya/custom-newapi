@@ -303,6 +303,35 @@ func TestNormalizeAnthropicInclusiveCacheUsageForSub2APIChannel(t *testing.T) {
 	require.Equal(t, 9984, openAIUsage.PromptTokensDetails.CachedTokens)
 }
 
+func TestNormalizeAnthropicInclusiveCacheUsageForSub2APIOpenAIStyleClaudeUsage(t *testing.T) {
+	claudeInfo := &ClaudeResponseInfo{
+		Usage: &dto.Usage{},
+	}
+	claudeResponse := &dto.ClaudeResponse{
+		Type: "message_delta",
+		Usage: &dto.ClaudeUsage{
+			PromptTokens:     10088,
+			CompletionTokens: 1,
+			TotalTokens:      10089,
+			PromptTokensDetails: &dto.InputTokenDetails{
+				CachedTokens: 9984,
+			},
+		},
+	}
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelName: "sub2api-deepseek",
+		},
+	}
+
+	require.True(t, FormatClaudeResponseInfo(claudeResponse, nil, claudeInfo))
+	require.Equal(t, 10088, claudeInfo.Usage.PromptTokens)
+	require.Equal(t, 9984, claudeInfo.Usage.PromptTokensDetails.CachedTokens)
+	require.True(t, normalizeAnthropicInclusiveCacheUsage(info, claudeInfo.Usage))
+	require.Equal(t, 104, claudeInfo.Usage.PromptTokens)
+	require.Equal(t, 105, claudeInfo.Usage.TotalTokens)
+}
+
 func TestNormalizeAnthropicInclusiveCacheUsageForExplicitChannelSetting(t *testing.T) {
 	usage := &dto.Usage{
 		PromptTokens:     10088,

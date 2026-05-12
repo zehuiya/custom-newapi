@@ -665,10 +665,71 @@ func buildOpenAIStyleUsageFromClaudeUsage(usage *dto.Usage) dto.Usage {
 	return clone
 }
 
+func mergeClaudeUsageIntoRelayUsage(relayUsage *dto.Usage, claudeUsage *dto.ClaudeUsage) {
+	if relayUsage == nil || claudeUsage == nil {
+		return
+	}
+	relayUsage.UsageSemantic = "anthropic"
+	if inputTokens := claudeUsage.GetInputTokens(); inputTokens > 0 {
+		relayUsage.PromptTokens = inputTokens
+	}
+	if outputTokens := claudeUsage.GetOutputTokens(); outputTokens > 0 {
+		relayUsage.CompletionTokens = outputTokens
+	}
+	if cacheReadTokens := claudeUsage.GetCacheReadInputTokens(); cacheReadTokens > 0 {
+		relayUsage.PromptTokensDetails.CachedTokens = cacheReadTokens
+	}
+	if cacheCreationTokens := claudeUsage.GetCacheCreationTotalTokens(); cacheCreationTokens > 0 {
+		relayUsage.PromptTokensDetails.CachedCreationTokens = cacheCreationTokens
+	}
+	if cacheCreation5m := claudeUsage.GetCacheCreation5mTokens(); cacheCreation5m > 0 {
+		relayUsage.ClaudeCacheCreation5mTokens = cacheCreation5m
+	}
+	if cacheCreation1h := claudeUsage.GetCacheCreation1hTokens(); cacheCreation1h > 0 {
+		relayUsage.ClaudeCacheCreation1hTokens = cacheCreation1h
+	}
+	relayUsage.TotalTokens = relayUsage.PromptTokens + relayUsage.CompletionTokens
+}
+
+func syncClaudeUsageFieldsFromRelayUsage(claudeUsage *dto.ClaudeUsage, relayUsage *dto.Usage) {
+	if claudeUsage == nil || relayUsage == nil {
+		return
+	}
+	claudeUsage.InputTokens = relayUsage.PromptTokens
+	claudeUsage.OutputTokens = relayUsage.CompletionTokens
+	claudeUsage.CacheReadInputTokens = relayUsage.PromptTokensDetails.CachedTokens
+	claudeUsage.CacheCreationInputTokens = relayUsage.PromptTokensDetails.CachedCreationTokens
+
+	cacheCreation5m, cacheCreation1h := service.NormalizeCacheCreationSplit(
+		relayUsage.PromptTokensDetails.CachedCreationTokens,
+		relayUsage.ClaudeCacheCreation5mTokens,
+		relayUsage.ClaudeCacheCreation1hTokens,
+	)
+	if cacheCreation5m > 0 || cacheCreation1h > 0 {
+		if claudeUsage.CacheCreation == nil {
+			claudeUsage.CacheCreation = &dto.ClaudeCacheCreationUsage{}
+		}
+		claudeUsage.CacheCreation.Ephemeral5mInputTokens = cacheCreation5m
+		claudeUsage.CacheCreation.Ephemeral1hInputTokens = cacheCreation1h
+	}
+}
+
 func buildMessageDeltaPatchUsage(claudeResponse *dto.ClaudeResponse, claudeInfo *ClaudeResponseInfo) *dto.ClaudeUsage {
 	usage := &dto.ClaudeUsage{}
 	if claudeResponse != nil && claudeResponse.Usage != nil {
 		*usage = *claudeResponse.Usage
+		if usage.InputTokens == 0 {
+			usage.InputTokens = claudeResponse.Usage.GetInputTokens()
+		}
+		if usage.OutputTokens == 0 {
+			usage.OutputTokens = claudeResponse.Usage.GetOutputTokens()
+		}
+		if usage.CacheReadInputTokens == 0 {
+			usage.CacheReadInputTokens = claudeResponse.Usage.GetCacheReadInputTokens()
+		}
+		if usage.CacheCreationInputTokens == 0 {
+			usage.CacheCreationInputTokens = claudeResponse.Usage.GetCacheCreationTotalTokens()
+		}
 	}
 
 	if claudeInfo == nil || claudeInfo.Usage == nil {
@@ -735,6 +796,39 @@ func patchClaudeMessageDeltaUsageData(data string, usage *dto.ClaudeUsage) strin
 	return data
 }
 
+func rewriteClaudeUsageData(data string, usage *dto.ClaudeUsage) string {
+	if data == "" || usage == nil {
+		return data
+	}
+
+	var rawData map[string]interface{}
+	if err := common.UnmarshalJsonStr(data, &rawData); err != nil {
+		return data
+	}
+	usageMap, ok := rawData["usage"].(map[string]interface{})
+	if !ok {
+		return data
+	}
+	if usage.InputTokens > 0 {
+		usageMap["input_tokens"] = usage.InputTokens
+	}
+	if usage.OutputTokens > 0 {
+		usageMap["output_tokens"] = usage.OutputTokens
+	}
+	if usage.CacheReadInputTokens > 0 {
+		usageMap["cache_read_input_tokens"] = usage.CacheReadInputTokens
+	}
+	if usage.CacheCreationInputTokens > 0 {
+		usageMap["cache_creation_input_tokens"] = usage.CacheCreationInputTokens
+	}
+	rawData["usage"] = usageMap
+	modifiedData, err := common.Marshal(rawData)
+	if err != nil {
+		return data
+	}
+	return string(modifiedData)
+}
+
 func setMessageDeltaUsageInt(data string, path string, localValue int) string {
 	if localValue <= 0 {
 		return data
@@ -767,13 +861,7 @@ func FormatClaudeResponseInfo(claudeResponse *dto.ClaudeResponse, oaiResponse *d
 
 		// message_start, 获取usage
 		if claudeResponse.Message != nil && claudeResponse.Message.Usage != nil {
-			claudeInfo.Usage.PromptTokens = claudeResponse.Message.Usage.InputTokens
-			claudeInfo.Usage.UsageSemantic = "anthropic"
-			claudeInfo.Usage.PromptTokensDetails.CachedTokens = claudeResponse.Message.Usage.CacheReadInputTokens
-			claudeInfo.Usage.PromptTokensDetails.CachedCreationTokens = claudeResponse.Message.Usage.CacheCreationInputTokens
-			claudeInfo.Usage.ClaudeCacheCreation5mTokens = claudeResponse.Message.Usage.GetCacheCreation5mTokens()
-			claudeInfo.Usage.ClaudeCacheCreation1hTokens = claudeResponse.Message.Usage.GetCacheCreation1hTokens()
-			claudeInfo.Usage.CompletionTokens = claudeResponse.Message.Usage.OutputTokens
+			mergeClaudeUsageIntoRelayUsage(claudeInfo.Usage, claudeResponse.Message.Usage)
 		}
 	} else if claudeResponse.Type == "content_block_delta" {
 		if claudeResponse.Delta != nil {
@@ -787,27 +875,7 @@ func FormatClaudeResponseInfo(claudeResponse *dto.ClaudeResponse, oaiResponse *d
 	} else if claudeResponse.Type == "message_delta" {
 		// 最终的usage获取
 		if claudeResponse.Usage != nil {
-			claudeInfo.Usage.UsageSemantic = "anthropic"
-			if claudeResponse.Usage.InputTokens > 0 {
-				// 不叠加，只取最新的
-				claudeInfo.Usage.PromptTokens = claudeResponse.Usage.InputTokens
-			}
-			if claudeResponse.Usage.CacheReadInputTokens > 0 {
-				claudeInfo.Usage.PromptTokensDetails.CachedTokens = claudeResponse.Usage.CacheReadInputTokens
-			}
-			if claudeResponse.Usage.CacheCreationInputTokens > 0 {
-				claudeInfo.Usage.PromptTokensDetails.CachedCreationTokens = claudeResponse.Usage.CacheCreationInputTokens
-			}
-			if cacheCreation5m := claudeResponse.Usage.GetCacheCreation5mTokens(); cacheCreation5m > 0 {
-				claudeInfo.Usage.ClaudeCacheCreation5mTokens = cacheCreation5m
-			}
-			if cacheCreation1h := claudeResponse.Usage.GetCacheCreation1hTokens(); cacheCreation1h > 0 {
-				claudeInfo.Usage.ClaudeCacheCreation1hTokens = cacheCreation1h
-			}
-			if claudeResponse.Usage.OutputTokens > 0 {
-				claudeInfo.Usage.CompletionTokens = claudeResponse.Usage.OutputTokens
-			}
-			claudeInfo.Usage.TotalTokens = claudeInfo.Usage.PromptTokens + claudeInfo.Usage.CompletionTokens
+			mergeClaudeUsageIntoRelayUsage(claudeInfo.Usage, claudeResponse.Usage)
 		}
 
 		// 判断是否完整
@@ -851,6 +919,14 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 			if claudeInfo.Usage != nil && claudeInfo.Usage.PromptTokens == 0 {
 				claudeInfo.Usage.PromptTokens = info.GetEstimatePromptTokens()
 			}
+			normalizedInclusiveUsage := false
+			if claudeResponse.Usage != nil {
+				normalizedInclusiveUsage = normalizeAnthropicInclusiveCacheUsage(info, claudeInfo.Usage)
+				syncClaudeUsageFieldsFromRelayUsage(claudeResponse.Usage, claudeInfo.Usage)
+				if normalizedInclusiveUsage {
+					data = rewriteClaudeUsageData(data, claudeResponse.Usage)
+				}
+			}
 			// 注入缓存信息到message_delta事件：如果渠道名包含cache、输入token>=4096、且上游未返回缓存数据
 			if info.ShouldInjectCacheInfo && claudeResponse.Usage != nil && claudeResponse.Usage.CacheReadInputTokens == 0 && claudeInfo.Usage != nil && claudeInfo.Usage.PromptTokens > 0 {
 				originalInputTokens := claudeInfo.Usage.PromptTokens
@@ -865,17 +941,7 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 				claudeInfo.Usage.PromptTokensDetails.CachedTokens = cachedTokens
 				claudeInfo.Usage.TotalTokens = uncachedTokens + claudeInfo.Usage.CompletionTokens
 
-				var rawData map[string]interface{}
-				if err := common.UnmarshalJsonStr(data, &rawData); err == nil {
-					if usageMap, ok := rawData["usage"].(map[string]interface{}); ok {
-						usageMap["input_tokens"] = uncachedTokens
-						usageMap["cache_read_input_tokens"] = cachedTokens
-						rawData["usage"] = usageMap
-						if modifiedData, err := common.Marshal(rawData); err == nil {
-							data = string(modifiedData)
-						}
-					}
-				}
+				data = rewriteClaudeUsageData(data, claudeResponse.Usage)
 			}
 			// 确保 message_delta 的 usage 包含完整的 input_tokens 和 cache 相关字段
 			// 解决 AWS Bedrock 等上游返回的 message_delta 缺少这些字段的问题
@@ -995,14 +1061,7 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		claudeInfo.Usage = &dto.Usage{}
 	}
 	if claudeResponse.Usage != nil {
-		claudeInfo.Usage.PromptTokens = claudeResponse.Usage.InputTokens
-		claudeInfo.Usage.CompletionTokens = claudeResponse.Usage.OutputTokens
-		claudeInfo.Usage.TotalTokens = claudeResponse.Usage.InputTokens + claudeResponse.Usage.OutputTokens
-		claudeInfo.Usage.UsageSemantic = "anthropic"
-		claudeInfo.Usage.PromptTokensDetails.CachedTokens = claudeResponse.Usage.CacheReadInputTokens
-		claudeInfo.Usage.PromptTokensDetails.CachedCreationTokens = claudeResponse.Usage.CacheCreationInputTokens
-		claudeInfo.Usage.ClaudeCacheCreation5mTokens = claudeResponse.Usage.GetCacheCreation5mTokens()
-		claudeInfo.Usage.ClaudeCacheCreation1hTokens = claudeResponse.Usage.GetCacheCreation1hTokens()
+		mergeClaudeUsageIntoRelayUsage(claudeInfo.Usage, claudeResponse.Usage)
 
 		if claudeInfo.Usage.PromptTokens == 0 || claudeInfo.Usage.CompletionTokens == 0 {
 			var responseText string
@@ -1018,8 +1077,8 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 			claudeResponse.Usage.OutputTokens = claudeInfo.Usage.CompletionTokens
 		}
 		normalizedInclusiveUsage := normalizeAnthropicInclusiveCacheUsage(info, claudeInfo.Usage)
-		if normalizedInclusiveUsage {
-			claudeResponse.Usage.InputTokens = claudeInfo.Usage.PromptTokens
+		if normalizedInclusiveUsage || claudeResponse.Usage.CacheReadInputTokens == 0 || claudeResponse.Usage.CacheCreationInputTokens == 0 {
+			syncClaudeUsageFieldsFromRelayUsage(claudeResponse.Usage, claudeInfo.Usage)
 		}
 
 		// 注入缓存信息：如果渠道名包含cache、输入token>=4096、且上游未返回缓存数据

@@ -559,6 +559,13 @@ type ClaudeUsage struct {
 	CacheCreationInputTokens int                       `json:"cache_creation_input_tokens"`
 	CacheReadInputTokens     int                       `json:"cache_read_input_tokens"`
 	OutputTokens             int                       `json:"output_tokens"`
+	PromptTokens             int                       `json:"prompt_tokens,omitempty"`
+	CompletionTokens         int                       `json:"completion_tokens,omitempty"`
+	TotalTokens              int                       `json:"total_tokens,omitempty"`
+	PromptTokensDetails      *InputTokenDetails        `json:"prompt_tokens_details,omitempty"`
+	InputTokensDetails       *InputTokenDetails        `json:"input_tokens_details,omitempty"`
+	PromptCacheHitTokens     int                       `json:"prompt_cache_hit_tokens,omitempty"`
+	CachedTokens             int                       `json:"cached_tokens,omitempty"`
 	CacheCreation            *ClaudeCacheCreationUsage `json:"cache_creation,omitempty"`
 	// claude cache 1h
 	ClaudeCacheCreation5mTokens int                  `json:"claude_cache_creation_5_m_tokens"`
@@ -585,12 +592,57 @@ func (u *ClaudeUsage) GetCacheCreation1hTokens() int {
 	return u.CacheCreation.Ephemeral1hInputTokens
 }
 
+func (u *ClaudeUsage) GetInputTokens() int {
+	if u == nil {
+		return 0
+	}
+	if u.InputTokens > 0 {
+		return u.InputTokens
+	}
+	return u.PromptTokens
+}
+
+func (u *ClaudeUsage) GetOutputTokens() int {
+	if u == nil {
+		return 0
+	}
+	if u.OutputTokens > 0 {
+		return u.OutputTokens
+	}
+	return u.CompletionTokens
+}
+
+func (u *ClaudeUsage) GetCacheReadInputTokens() int {
+	if u == nil {
+		return 0
+	}
+	if u.CacheReadInputTokens > 0 {
+		return u.CacheReadInputTokens
+	}
+	if u.PromptTokensDetails != nil && u.PromptTokensDetails.CachedTokens > 0 {
+		return u.PromptTokensDetails.CachedTokens
+	}
+	if u.InputTokensDetails != nil && u.InputTokensDetails.CachedTokens > 0 {
+		return u.InputTokensDetails.CachedTokens
+	}
+	if u.PromptCacheHitTokens > 0 {
+		return u.PromptCacheHitTokens
+	}
+	return u.CachedTokens
+}
+
 func (u *ClaudeUsage) GetCacheCreationTotalTokens() int {
 	if u == nil {
 		return 0
 	}
 	if u.CacheCreationInputTokens > 0 {
 		return u.CacheCreationInputTokens
+	}
+	if u.PromptTokensDetails != nil && u.PromptTokensDetails.CachedCreationTokens > 0 {
+		return u.PromptTokensDetails.CachedCreationTokens
+	}
+	if u.InputTokensDetails != nil && u.InputTokensDetails.CachedCreationTokens > 0 {
+		return u.InputTokensDetails.CachedCreationTokens
 	}
 	return u.GetCacheCreation5mTokens() + u.GetCacheCreation1hTokens()
 }

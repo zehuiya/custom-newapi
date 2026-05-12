@@ -87,6 +87,7 @@ func OaiResponsesToChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	}
 
 	service.IOCopyBytesGracefully(c, resp, responseBody)
+	markOpenAIUsageSemantic(usage)
 	return usage, nil
 }
 
@@ -546,5 +547,6 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 	if info.RelayFormat == types.RelayFormatOpenAI {
 		helper.Done(c)
 	}
+	markOpenAIUsageSemantic(usage)
 	return usage, nil
 }
