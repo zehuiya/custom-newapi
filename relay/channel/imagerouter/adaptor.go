@@ -88,6 +88,8 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 	if strings.TrimSpace(request.Size) == "" {
 		request.Size = "auto"
 	}
+	one := uint(1)
+	request.N = &one
 	request.ResponseFormat = "b64_ephemeral"
 
 	return request, nil

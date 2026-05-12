@@ -47,9 +47,9 @@ type runwareSingleError struct {
 }
 
 type openAIImageResponse struct {
-	Created int64             `json:"created"`
-	Data    []openAIImageData `json:"data"`
-	Usage   *dto.Usage        `json:"usage,omitempty"`
+	Created int64           `json:"created"`
+	Data    openAIImageData `json:"data"`
+	Usage   *dto.Usage      `json:"usage,omitempty"`
 }
 
 type openAIImageData struct {
@@ -85,9 +85,9 @@ func runwareImageHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 
 	payload := openAIImageResponse{
 		Created: common.GetTimestamp(),
-		Data:    make([]openAIImageData, 0, len(imageResp.Data)),
 	}
 
+	hasImage := false
 	for _, item := range imageResp.Data {
 		b64 := strings.TrimSpace(item.ImageBase64Data)
 		if b64 == "" {
@@ -103,15 +103,17 @@ func runwareImageHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 		if b64 == "" {
 			continue
 		}
-		payload.Data = append(payload.Data, openAIImageData{B64JSON: b64})
+		payload.Data = openAIImageData{B64JSON: b64}
+		hasImage = true
+		break
 	}
 
-	if len(payload.Data) == 0 {
+	if !hasImage {
 		return nil, types.NewOpenAIError(errors.New("runware adaptor: no usable image data"), types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 
 	if info != nil {
-		info.PriceData.AddOtherRatio("n", float64(len(payload.Data)))
+		info.PriceData.AddOtherRatio("n", 1)
 	}
 	payload.Usage = channel.BuildImageResponseUsage()
 

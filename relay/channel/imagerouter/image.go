@@ -30,9 +30,9 @@ type imageRouterImageData struct {
 }
 
 type openAIImageResponse struct {
-	Created int64             `json:"created"`
-	Data    []openAIImageData `json:"data"`
-	Usage   *dto.Usage        `json:"usage,omitempty"`
+	Created int64           `json:"created"`
+	Data    openAIImageData `json:"data"`
+	Usage   *dto.Usage      `json:"usage,omitempty"`
 }
 
 type openAIImageData struct {
@@ -65,12 +65,12 @@ func imageRouterImageHandler(c *gin.Context, resp *http.Response, info *relaycom
 
 	payload := openAIImageResponse{
 		Created: imageResp.Created,
-		Data:    make([]openAIImageData, 0, len(imageResp.Data)),
 	}
 	if payload.Created == 0 {
 		payload.Created = common.GetTimestamp()
 	}
 
+	hasImage := false
 	for _, item := range imageResp.Data {
 		b64 := strings.TrimSpace(item.B64JSON)
 		if b64 == "" && strings.TrimSpace(item.URL) != "" {
@@ -83,18 +83,20 @@ func imageRouterImageHandler(c *gin.Context, resp *http.Response, info *relaycom
 		if b64 == "" {
 			continue
 		}
-		payload.Data = append(payload.Data, openAIImageData{
+		payload.Data = openAIImageData{
 			B64JSON:       b64,
 			RevisedPrompt: item.RevisedPrompt,
-		})
+		}
+		hasImage = true
+		break
 	}
 
-	if len(payload.Data) == 0 {
+	if !hasImage {
 		return nil, types.NewOpenAIError(errors.New("imagerouter adaptor: no usable image data"), types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 
 	if info != nil {
-		info.PriceData.AddOtherRatio("n", float64(len(payload.Data)))
+		info.PriceData.AddOtherRatio("n", 1)
 	}
 	payload.Usage = channel.BuildImageResponseUsage()
 

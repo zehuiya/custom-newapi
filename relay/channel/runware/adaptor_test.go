@@ -74,7 +74,7 @@ func TestConvertImageRequestBuildsRunwareTask(t *testing.T) {
 	require.Equal(t, "a quiet mountain at sunset", task["positivePrompt"])
 	require.Equal(t, float64(1024), task["width"])
 	require.Equal(t, float64(768), task["height"])
-	require.Equal(t, float64(2), task["numberResults"])
+	require.Equal(t, float64(1), task["numberResults"])
 	require.Equal(t, "base64Data", task["outputType"])
 	require.Equal(t, "WEBP", task["outputFormat"])
 	require.Equal(t, "sync", task["deliveryMethod"])
@@ -122,8 +122,7 @@ func TestDoResponseForImageGenerationUsesBase64AndSanitizesResponse(t *testing.T
 	var payload map[string]any
 	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &payload))
 	require.ElementsMatch(t, []string{"created", "data", "usage"}, mapKeys(payload))
-	data := payload["data"].([]any)
-	item := data[0].(map[string]any)
+	item := payload["data"].(map[string]any)
 	require.Equal(t, "aW1hZ2U=", item["b64_json"])
 	require.NotContains(t, item, "url")
 	require.NotContains(t, payload, "cost")
@@ -177,8 +176,7 @@ func TestDoResponseForImageGenerationDownloadsURLFallback(t *testing.T) {
 
 	var payload map[string]any
 	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &payload))
-	data := payload["data"].([]any)
-	item := data[0].(map[string]any)
+	item := payload["data"].(map[string]any)
 	require.Equal(t, base64.StdEncoding.EncodeToString(imageBytes), item["b64_json"])
 	require.NotContains(t, item, "url")
 }

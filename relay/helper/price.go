@@ -155,7 +155,7 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		CacheCreation1hRatio: cacheCreationRatio1h,
 		QuotaToPreConsume:    preConsumedQuota,
 	}
-	if usePrice && meta != nil && meta.ImagePriceRatio != 0 {
+	if usePrice && meta != nil && meta.ImagePriceRatio != 0 && meta.ImagePriceRatio != 1 {
 		priceData.AddOtherRatio(types.OtherRatioImagePrice, meta.ImagePriceRatio)
 	}
 

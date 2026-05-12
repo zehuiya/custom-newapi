@@ -6,7 +6,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestImageRequestQwenImage2512PriceRatios(t *testing.T) {
+func TestImageRequestQwenImage2512UsesFlatPrice(t *testing.T) {
+	t.Parallel()
+
+	request := ImageRequest{
+		Model:   "qwen-image-2512",
+		Quality: "high",
+		Size:    "512x512",
+	}
+
+	require.Equal(t, 0.0, request.GetTokenCountMeta().ImagePriceRatio)
+}
+
+func TestImageRequestDallePriceRatios(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -15,31 +27,30 @@ func TestImageRequestQwenImage2512PriceRatios(t *testing.T) {
 		want    float64
 	}{
 		{
-			name: "auto",
+			name: "dall-e-2 512",
 			request: ImageRequest{
-				Model:   "qwen-image-2512",
-				Quality: "auto",
-				Size:    "auto",
+				Model: "dall-e-2",
+				Size:  "512x512",
 			},
-			want: 1,
+			want: 0.45,
 		},
 		{
-			name: "low 512",
+			name: "dall-e-3 hd square",
 			request: ImageRequest{
-				Model:   "qwen-image-2512",
-				Quality: "low",
-				Size:    "512x512",
-			},
-			want: 0.40625,
-		},
-		{
-			name: "high 1024",
-			request: ImageRequest{
-				Model:   "qwen-image-2512",
-				Quality: "high",
+				Model:   "dall-e-3",
+				Quality: "hd",
 				Size:    "1024x1024",
 			},
-			want: 1.609375,
+			want: 2,
+		},
+		{
+			name: "dall-e-3 hd portrait",
+			request: ImageRequest{
+				Model:   "dall-e-3",
+				Quality: "hd",
+				Size:    "1024x1792",
+			},
+			want: 3,
 		},
 	}
 

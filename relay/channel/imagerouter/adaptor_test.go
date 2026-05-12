@@ -42,6 +42,7 @@ func TestConvertImageRequestMapsModelAndForcesEphemeralBase64(t *testing.T) {
 	t.Parallel()
 
 	adaptor := &Adaptor{}
+	n := uint(3)
 	info := &relaycommon.RelayInfo{
 		RelayMode:       relayconstant.RelayModeImagesGenerations,
 		OriginModelName: ModelQwenImage2512,
@@ -50,6 +51,7 @@ func TestConvertImageRequestMapsModelAndForcesEphemeralBase64(t *testing.T) {
 	request := dto.ImageRequest{
 		Model:        ModelQwenImage2512,
 		Prompt:       "a quiet mountain at sunset",
+		N:            &n,
 		Quality:      "auto",
 		Size:         "auto",
 		OutputFormat: mustRawJSON(t, "webp"),
@@ -68,6 +70,7 @@ func TestConvertImageRequestMapsModelAndForcesEphemeralBase64(t *testing.T) {
 	require.Equal(t, "b64_ephemeral", payload["response_format"])
 	require.Equal(t, "auto", payload["quality"])
 	require.Equal(t, "auto", payload["size"])
+	require.Equal(t, float64(1), payload["n"])
 	require.Equal(t, "webp", payload["output_format"])
 	require.Equal(t, UpstreamModelQwenImage2512, info.UpstreamModelName)
 }
@@ -117,8 +120,7 @@ func TestDoResponseForImageGenerationUsesUpstreamBase64AndKeepsConfiguredPrice(t
 	require.Equal(t, float64(1), usagePayload["total_tokens"])
 	require.NotContains(t, usagePayload, "cost")
 
-	data := payload["data"].([]any)
-	item := data[0].(map[string]any)
+	item := payload["data"].(map[string]any)
 	require.Equal(t, "aW1hZ2U=", item["b64_json"])
 	require.NotContains(t, item, "url")
 	require.NotContains(t, item, "revised_prompt")
@@ -174,8 +176,7 @@ func TestDoResponseForImageGenerationDownloadsURLFallback(t *testing.T) {
 
 	var payload map[string]any
 	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &payload))
-	data := payload["data"].([]any)
-	item := data[0].(map[string]any)
+	item := payload["data"].(map[string]any)
 	require.Equal(t, base64.StdEncoding.EncodeToString(imageBytes), item["b64_json"])
 	require.NotContains(t, item, "url")
 }

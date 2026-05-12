@@ -136,6 +136,9 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 	if _, hasN := info.PriceData.OtherRatios["n"]; !hasN {
 		info.PriceData.AddOtherRatio("n", float64(imageN))
 	}
+	if nRatio, hasN := info.PriceData.OtherRatios["n"]; hasN && nRatio > 0 {
+		imageN = uint(nRatio)
+	}
 
 	if usage.(*dto.Usage).TotalTokens == 0 {
 		usage.(*dto.Usage).TotalTokens = 1
@@ -162,12 +165,10 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 	}
 	if info.PriceData.UsePrice && info.PriceData.ModelPrice > 0 {
 		logContent = append(logContent, fmt.Sprintf("基础价格 $%.6f", info.PriceData.ModelPrice))
-		imagePriceRatio := 1.0
 		if ratio, ok := info.PriceData.OtherRatios[types.OtherRatioImagePrice]; ok {
-			imagePriceRatio = ratio
+			logContent = append(logContent, fmt.Sprintf("参数倍率 %.6gx", ratio))
+			logContent = append(logContent, fmt.Sprintf("折算价格 $%.6f", info.PriceData.ModelPrice*ratio))
 		}
-		logContent = append(logContent, fmt.Sprintf("参数倍率 %.6gx", imagePriceRatio))
-		logContent = append(logContent, fmt.Sprintf("折算价格 $%.6f", info.PriceData.ModelPrice*imagePriceRatio))
 	}
 
 	service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), logContent)

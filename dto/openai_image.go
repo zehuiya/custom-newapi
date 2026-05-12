@@ -127,6 +127,7 @@ func indexComma(s string) int {
 func (i *ImageRequest) GetTokenCountMeta() *types.TokenCountMeta {
 	var sizeRatio = 1.0
 	var qualityRatio = 1.0
+	var imagePriceRatio float64
 
 	modelName := strings.ToLower(strings.TrimSpace(i.Model))
 	size := strings.ToLower(strings.TrimSpace(i.Size))
@@ -150,21 +151,7 @@ func (i *ImageRequest) GetTokenCountMeta() *types.TokenCountMeta {
 				qualityRatio = 1.5
 			}
 		}
-	} else if strings.Contains(modelName, "qwen-image-2512") {
-		if size == "" || size == "auto" || size == "1024x1024" {
-			sizeRatio = 1
-		} else if size == "512x512" {
-			sizeRatio = 0.5
-		}
-
-		switch quality {
-		case "", "auto":
-			qualityRatio = 1
-		case "low":
-			qualityRatio = 0.8125
-		case "high":
-			qualityRatio = 1.609375
-		}
+		imagePriceRatio = sizeRatio * qualityRatio
 	}
 
 	// n is NOT included here; it is handled via OtherRatio("n") in
@@ -174,7 +161,7 @@ func (i *ImageRequest) GetTokenCountMeta() *types.TokenCountMeta {
 	return &types.TokenCountMeta{
 		CombineText:     i.Prompt,
 		MaxTokens:       1584,
-		ImagePriceRatio: sizeRatio * qualityRatio,
+		ImagePriceRatio: imagePriceRatio,
 	}
 }
 

@@ -88,3 +88,30 @@ func TestModelPriceHelperKeepsConfiguredImageBasePriceAndAppliesRequestRatio(t *
 	require.Equal(t, 1.609375, priceData.OtherRatios[types.OtherRatioImagePrice])
 	require.Equal(t, int(0.0064*1.609375*common.QuotaPerUnit), priceData.QuotaToPreConsume)
 }
+
+func TestModelPriceHelperDoesNotPersistNeutralImageRatio(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	originalModelPrice := ratio_setting.ModelPrice2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(originalModelPrice))
+	})
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"flat-image-price-test":0.25}`))
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Set("group", "default")
+
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "flat-image-price-test",
+		UserGroup:       "default",
+		UsingGroup:      "default",
+	}
+
+	priceData, err := ModelPriceHelper(ctx, info, 1, &types.TokenCountMeta{ImagePriceRatio: 1})
+	require.NoError(t, err)
+	require.True(t, priceData.UsePrice)
+	require.Equal(t, 0.25, priceData.ModelPrice)
+	require.NotContains(t, priceData.OtherRatios, types.OtherRatioImagePrice)
+	require.Equal(t, int(0.25*common.QuotaPerUnit), priceData.QuotaToPreConsume)
+}

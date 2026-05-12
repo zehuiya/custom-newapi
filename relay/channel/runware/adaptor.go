@@ -106,7 +106,7 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 		PositivePrompt: request.Prompt,
 		Width:          width,
 		Height:         height,
-		NumberResults:  int(imageCount(request.N)),
+		NumberResults:  1,
 		OutputType:     "base64Data",
 		OutputFormat:   parseOutputFormat(request.OutputFormat),
 		DeliveryMethod: "sync",
@@ -144,16 +144,6 @@ func upstreamModelName(modelName string) string {
 	default:
 		return modelName
 	}
-}
-
-func imageCount(n *uint) uint {
-	if n == nil || *n == 0 {
-		return 1
-	}
-	if *n > 20 {
-		return 20
-	}
-	return *n
 }
 
 func parseImageSize(size string) (int, int, error) {
