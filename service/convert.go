@@ -615,6 +615,18 @@ func ResponseOpenAI2Claude(openAIResponse *dto.OpenAITextResponse, info *relayco
 	}
 	for _, choice := range openAIResponse.Choices {
 		stopReason = stopReasonOpenAI2Claude(choice.FinishReason)
+		if info != nil && info.ChannelMeta != nil && info.ChannelType == constant.ChannelTypeOpenAI {
+			reasoning := choice.Message.ReasoningContent
+			if reasoning == "" {
+				reasoning = choice.Message.Reasoning
+			}
+			if reasoning != "" {
+				contents = append(contents, dto.ClaudeMediaMessage{
+					Type:     "thinking",
+					Thinking: common.GetPointer[string](reasoning),
+				})
+			}
+		}
 		if choice.FinishReason == "tool_calls" {
 			for _, toolUse := range choice.Message.ParseToolCalls() {
 				claudeContent := dto.ClaudeMediaMessage{}

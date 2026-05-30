@@ -43,6 +43,11 @@ func sendStreamData(c *gin.Context, info *relaycommon.RelayInfo, data string, fo
 	}
 
 	if !forceFormat && !thinkToContent {
+		if shouldNormalizeOpenAIReasoning(info) {
+			if normalizedData, changed, err := normalizeReasoningContentInStreamData(data); err == nil && changed {
+				data = normalizedData
+			}
+		}
 		return helper.StringData(c, data)
 	}
 
@@ -52,6 +57,9 @@ func sendStreamData(c *gin.Context, info *relaycommon.RelayInfo, data string, fo
 	}
 
 	if !thinkToContent {
+		if shouldNormalizeOpenAIReasoning(info) {
+			normalizeReasoningContentInStreamResponse(&lastStreamResponse)
+		}
 		return helper.ObjectData(c, lastStreamResponse)
 	}
 
@@ -317,6 +325,10 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 	}
 
 	applyUsagePostProcessing(info, &simpleResponse.Usage, responseBody)
+	normalizeReasoning := shouldNormalizeOpenAIReasoning(info)
+	if normalizeReasoning {
+		normalizeReasoningContentInTextResponse(&simpleResponse)
+	}
 
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAI:
@@ -327,6 +339,9 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 				return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 			}
 			bodyMap["usage"] = simpleResponse.Usage
+			if normalizeReasoning {
+				normalizeReasoningContentInChoices(bodyMap, "message")
+			}
 			responseBody, _ = common.Marshal(bodyMap)
 		}
 		if forceFormat {
@@ -335,6 +350,11 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 				return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 			}
 		} else {
+			if normalizeReasoning && !usageModified {
+				if normalizedBody, changed, err := normalizeReasoningContentInBody(responseBody, "message"); err == nil && changed {
+					responseBody = normalizedBody
+				}
+			}
 			break
 		}
 	case types.RelayFormatClaude:
