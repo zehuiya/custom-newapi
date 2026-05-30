@@ -42,6 +42,40 @@ func IsChannelEnabledForAnyGroupModel(groups []string, modelName string, channel
 	return false
 }
 
+func HasContextLimitedChannelForGroupModel(group string, modelName string) bool {
+	hasContextLimit, _ := TokenLimitedChannelFlagsForGroupModel(group, modelName)
+	return hasContextLimit
+}
+
+func TokenLimitedChannelFlagsForGroupModel(group string, modelName string) (bool, bool) {
+	if group == "" || modelName == "" {
+		return false, false
+	}
+	if !common.MemoryCacheEnabled {
+		return tokenLimitedChannelFlagsForGroupModelDB(group, modelName)
+	}
+
+	channelSyncLock.RLock()
+	defer channelSyncLock.RUnlock()
+
+	if group2model2channels == nil {
+		return false, false
+	}
+
+	seen := make(map[int]struct{})
+	hasContextLimit, hasOutputLimit := tokenLimitedChannelFlagsInList(group2model2channels[group][modelName], seen)
+	if hasContextLimit && hasOutputLimit {
+		return true, true
+	}
+	normalized := ratio_setting.FormatMatchingModelName(modelName)
+	if normalized != "" && normalized != modelName {
+		normalizedHasContextLimit, normalizedHasOutputLimit := tokenLimitedChannelFlagsInList(group2model2channels[group][normalized], seen)
+		hasContextLimit = hasContextLimit || normalizedHasContextLimit
+		hasOutputLimit = hasOutputLimit || normalizedHasOutputLimit
+	}
+	return hasContextLimit, hasOutputLimit
+}
+
 func isChannelEnabledForGroupModelDB(group string, modelName string, channelID int) bool {
 	var count int64
 	err := DB.Model(&Ability{}).
@@ -61,6 +95,48 @@ func isChannelEnabledForGroupModelDB(group string, modelName string, channelID i
 	return err == nil && count > 0
 }
 
+func hasContextLimitedChannelForGroupModelDB(group string, modelName string) bool {
+	hasContextLimit, _ := tokenLimitedChannelFlagsForGroupModelDB(group, modelName)
+	return hasContextLimit
+}
+
+func tokenLimitedChannelFlagsForGroupModelDB(group string, modelName string) (bool, bool) {
+	hasContextLimit, hasOutputLimit := tokenLimitedChannelFlagsForGroupModelDBExact(group, modelName)
+	if hasContextLimit && hasOutputLimit {
+		return true, true
+	}
+	normalized := ratio_setting.FormatMatchingModelName(modelName)
+	if normalized != "" && normalized != modelName {
+		normalizedHasContextLimit, normalizedHasOutputLimit := tokenLimitedChannelFlagsForGroupModelDBExact(group, normalized)
+		hasContextLimit = hasContextLimit || normalizedHasContextLimit
+		hasOutputLimit = hasOutputLimit || normalizedHasOutputLimit
+	}
+	return hasContextLimit, hasOutputLimit
+}
+
+func tokenLimitedChannelFlagsForGroupModelDBExact(group string, modelName string) (bool, bool) {
+	var channels []Channel
+	groupCol := "abilities." + commonGroupCol
+	err := DB.Table("abilities").
+		Select("channels.max_context_tokens, channels.max_output_tokens").
+		Joins("JOIN channels ON channels.id = abilities.channel_id").
+		Where(groupCol+" = ? and abilities.model = ? and abilities.enabled = ?", group, modelName, true).
+		Scan(&channels).Error
+	if err != nil {
+		return false, false
+	}
+	hasContextLimit := false
+	hasOutputLimit := false
+	for i := range channels {
+		hasContextLimit = hasContextLimit || channels[i].GetMaxContextTokens() > 0
+		hasOutputLimit = hasOutputLimit || channels[i].GetMaxOutputTokens() > 0
+		if hasContextLimit && hasOutputLimit {
+			return true, true
+		}
+	}
+	return hasContextLimit, hasOutputLimit
+}
+
 func isChannelIDInList(list []int, channelID int) bool {
 	for _, id := range list {
 		if id == channelID {
@@ -68,4 +144,28 @@ func isChannelIDInList(list []int, channelID int) bool {
 		}
 	}
 	return false
+}
+
+func hasContextLimitedChannelInList(list []int, seen map[int]struct{}) bool {
+	hasContextLimit, _ := tokenLimitedChannelFlagsInList(list, seen)
+	return hasContextLimit
+}
+
+func tokenLimitedChannelFlagsInList(list []int, seen map[int]struct{}) (bool, bool) {
+	hasContextLimit := false
+	hasOutputLimit := false
+	for _, id := range list {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		if channel, ok := channelsIDM[id]; ok {
+			hasContextLimit = hasContextLimit || channel.GetMaxContextTokens() > 0
+			hasOutputLimit = hasOutputLimit || channel.GetMaxOutputTokens() > 0
+			if hasContextLimit && hasOutputLimit {
+				return true, true
+			}
+		}
+	}
+	return hasContextLimit, hasOutputLimit
 }

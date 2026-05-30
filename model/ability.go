@@ -88,6 +88,22 @@ func getPriority(group string, model string, retry int) (int, error) {
 	return priorityToUse, nil
 }
 
+func getPrioritiesForChannel(group string, model string) ([]int, error) {
+	var priorities []int
+	err := DB.Model(&Ability{}).
+		Select("DISTINCT(priority)").
+		Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true).
+		Order("priority DESC").
+		Pluck("priority", &priorities).Error
+	if err != nil {
+		return nil, err
+	}
+	if len(priorities) == 0 {
+		return nil, errors.New("channel ability priority not found")
+	}
+	return priorities, nil
+}
+
 func getChannelQuery(group string, model string, retry int) (*gorm.DB, error) {
 	maxPrioritySubQuery := DB.Model(&Ability{}).Select("MAX(priority)").Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true)
 	channelQuery := DB.Where(commonGroupCol+" = ? and model = ? and enabled = ? and priority = (?)", group, model, true, maxPrioritySubQuery)
@@ -104,6 +120,13 @@ func getChannelQuery(group string, model string, retry int) (*gorm.DB, error) {
 }
 
 func GetChannel(group string, model string, retry int) (*Channel, error) {
+	return GetChannelWithTokenLimit(group, model, retry, nil)
+}
+
+func GetChannelWithTokenLimit(group string, model string, retry int, tokenLimit *ChannelTokenLimit) (*Channel, error) {
+	if tokenLimit != nil {
+		return getChannelWithTokenLimitDB(group, model, retry, tokenLimit)
+	}
 	var abilities []Ability
 
 	var err error = nil
@@ -141,6 +164,77 @@ func GetChannel(group string, model string, retry int) (*Channel, error) {
 	}
 	err = DB.First(&channel, "id = ?", channel.Id).Error
 	return &channel, err
+}
+
+func getChannelWithTokenLimitDB(group string, model string, retry int, tokenLimit *ChannelTokenLimit) (*Channel, error) {
+	priorities, err := getPrioritiesForChannel(group, model)
+	if err != nil {
+		return nil, err
+	}
+	if retry >= len(priorities) {
+		retry = len(priorities) - 1
+	}
+
+	for priorityIndex := retry; priorityIndex < len(priorities); priorityIndex++ {
+		priority := priorities[priorityIndex]
+		var abilities []Ability
+		err = DB.Where(commonGroupCol+" = ? and model = ? and enabled = ? and priority = ?", group, model, true, priority).
+			Order("weight DESC").
+			Find(&abilities).Error
+		if err != nil {
+			return nil, err
+		}
+		if len(abilities) == 0 {
+			continue
+		}
+
+		ids := make([]int, 0, len(abilities))
+		for _, ability := range abilities {
+			ids = append(ids, ability.ChannelId)
+		}
+		var channels []Channel
+		if err = DB.Where("id in ?", ids).Find(&channels).Error; err != nil {
+			return nil, err
+		}
+		channelByID := make(map[int]*Channel, len(channels))
+		for i := range channels {
+			channelByID[channels[i].Id] = &channels[i]
+		}
+
+		type candidate struct {
+			ability Ability
+			channel *Channel
+		}
+		candidates := make([]candidate, 0, len(abilities))
+		weightSum := uint(0)
+		for _, ability := range abilities {
+			channel, ok := channelByID[ability.ChannelId]
+			if !ok {
+				return nil, fmt.Errorf("channel #%d does not exist", ability.ChannelId)
+			}
+			if !tokenLimit.Satisfies(channel) {
+				continue
+			}
+			candidates = append(candidates, candidate{
+				ability: ability,
+				channel: channel,
+			})
+			weightSum += ability.Weight + 10
+		}
+		if len(candidates) == 0 {
+			continue
+		}
+
+		weight := common.GetRandomInt(int(weightSum))
+		for _, candidate := range candidates {
+			weight -= int(candidate.ability.Weight) + 10
+			if weight <= 0 {
+				return candidate.channel, nil
+			}
+		}
+	}
+
+	return nil, nil
 }
 
 func (channel *Channel) AddAbilities(tx *gorm.DB) error {

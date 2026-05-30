@@ -16,6 +16,7 @@ type RetryParam struct {
 	TokenGroup   string
 	ModelName    string
 	Retry        *int
+	TokenLimit   *model.ChannelTokenLimit
 	resetNextTry bool
 }
 
@@ -43,6 +44,29 @@ func (p *RetryParam) IncreaseRetry() {
 
 func (p *RetryParam) ResetRetryNextTry() {
 	p.resetNextTry = true
+}
+
+func HasContextLimitedChannelForSelection(c *gin.Context, tokenGroup string, modelName string) bool {
+	hasContextLimit, _ := TokenLimitedChannelFlagsForSelection(c, tokenGroup, modelName)
+	return hasContextLimit
+}
+
+func TokenLimitedChannelFlagsForSelection(c *gin.Context, tokenGroup string, modelName string) (bool, bool) {
+	if tokenGroup == "auto" {
+		userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
+		hasContextLimit := false
+		hasOutputLimit := false
+		for _, group := range GetUserAutoGroup(userGroup) {
+			groupHasContextLimit, groupHasOutputLimit := model.TokenLimitedChannelFlagsForGroupModel(group, modelName)
+			hasContextLimit = hasContextLimit || groupHasContextLimit
+			hasOutputLimit = hasOutputLimit || groupHasOutputLimit
+			if hasContextLimit && hasOutputLimit {
+				return true, true
+			}
+		}
+		return hasContextLimit, hasOutputLimit
+	}
+	return model.TokenLimitedChannelFlagsForGroupModel(tokenGroup, modelName)
 }
 
 // CacheGetRandomSatisfiedChannel tries to get a random channel that satisfies the requirements.
@@ -115,7 +139,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			}
 			logger.LogDebug(param.Ctx, "Auto selecting group: %s, priorityRetry: %d", autoGroup, priorityRetry)
 
-			channel, _ = model.GetRandomSatisfiedChannel(autoGroup, param.ModelName, priorityRetry)
+			channel, _ = model.GetRandomSatisfiedChannelWithTokenLimit(autoGroup, param.ModelName, priorityRetry, param.TokenLimit)
 			if channel == nil {
 				// Current group has no available channel for this model, try next group
 				// 当前分组没有该模型的可用渠道，尝试下一个分组
@@ -153,7 +177,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			break
 		}
 	} else {
-		channel, err = model.GetRandomSatisfiedChannel(param.TokenGroup, param.ModelName, param.GetRetry())
+		channel, err = model.GetRandomSatisfiedChannelWithTokenLimit(param.TokenGroup, param.ModelName, param.GetRetry(), param.TokenLimit)
 		if err != nil {
 			return nil, param.TokenGroup, err
 		}

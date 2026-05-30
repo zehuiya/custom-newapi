@@ -124,9 +124,19 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
 	needCountToken := constant.CountToken
+	needTokenLimitMeta := false
+	needInputTokenForLimit := false
+	if !constant.CountToken {
+		selectedHasContextLimit, selectedHasOutputLimit := selectedChannelTokenLimitFlags(c)
+		selectionHasContextLimit, selectionHasOutputLimit := service.TokenLimitedChannelFlagsForSelection(c, relayInfo.TokenGroup, relayInfo.OriginModelName)
+		hasContextLimit := selectedHasContextLimit || selectionHasContextLimit
+		hasOutputLimit := selectedHasOutputLimit || selectionHasOutputLimit
+		needTokenLimitMeta = hasContextLimit || hasOutputLimit
+		needInputTokenForLimit = hasContextLimit
+	}
 	// Avoid building huge CombineText (strings.Join) when token counting and sensitive check are both disabled.
 	var meta *types.TokenCountMeta
-	if needSensitiveCheck || needCountToken {
+	if needSensitiveCheck || needCountToken || needTokenLimitMeta {
 		meta = request.GetTokenCountMeta()
 	} else {
 		meta = fastTokenCountMetaForPricing(request)
@@ -148,6 +158,19 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 
 	relayInfo.SetEstimatePromptTokens(tokens)
+
+	tokenLimitInputTokens := tokens
+	if needInputTokenForLimit {
+		tokenLimitInputTokens, err = service.EstimateRequestTokenForLimit(c, meta, relayInfo)
+		if err != nil {
+			newAPIError = types.NewError(err, types.ErrorCodeCountTokenFailed)
+			return
+		}
+	}
+
+	if newAPIError = ensureSelectedChannelSatisfiesTokenLimit(c, relayInfo, tokenLimitInputTokens, meta.MaxTokens); newAPIError != nil {
+		return
+	}
 
 	priceData, err := helper.ModelPriceHelper(c, relayInfo, tokens, meta)
 	if err != nil {
@@ -182,6 +205,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		TokenGroup: relayInfo.TokenGroup,
 		ModelName:  relayInfo.OriginModelName,
 		Retry:      common.GetPointer(0),
+		TokenLimit: &model.ChannelTokenLimit{
+			InputTokens: tokenLimitInputTokens,
+			MaxTokens:   meta.MaxTokens,
+		},
 	}
 	relayInfo.RetryIndex = 0
 	relayInfo.LastError = nil
@@ -281,6 +308,76 @@ func fastTokenCountMetaForPricing(request dto.Request) *types.TokenCountMeta {
 		// Best-effort: leave CombineText empty to avoid large allocations.
 	}
 	return meta
+}
+
+func selectedChannelTokenLimitFlags(c *gin.Context) (bool, bool) {
+	channelID := common.GetContextKeyInt(c, constant.ContextKeyChannelId)
+	if channelID <= 0 {
+		return false, false
+	}
+	channel, err := model.CacheGetChannel(channelID)
+	if err != nil || channel == nil {
+		return false, false
+	}
+	return channel.GetMaxContextTokens() > 0, channel.GetMaxOutputTokens() > 0
+}
+
+func ensureSelectedChannelSatisfiesTokenLimit(c *gin.Context, info *relaycommon.RelayInfo, inputTokens int, maxTokens int) *types.NewAPIError {
+	channelID := common.GetContextKeyInt(c, constant.ContextKeyChannelId)
+	if channelID <= 0 {
+		return nil
+	}
+
+	channel, err := model.CacheGetChannel(channelID)
+	if err != nil {
+		return types.NewErrorWithStatusCode(err, types.ErrorCodeGetChannelFailed, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
+	}
+
+	tokenLimit := &model.ChannelTokenLimit{
+		InputTokens: inputTokens,
+		MaxTokens:   maxTokens,
+	}
+	if tokenLimit.Satisfies(channel) {
+		return nil
+	}
+
+	if _, specificChannel := common.GetContextKey(c, constant.ContextKeyTokenSpecificChannelId); specificChannel {
+		return types.NewErrorWithStatusCode(
+			fmt.Errorf("channel #%d does not satisfy token limits: input_tokens=%d, max_tokens=%d, max_context_tokens=%d, max_output_tokens=%d",
+				channel.Id, inputTokens, maxTokens, channel.GetMaxContextTokens(), channel.GetMaxOutputTokens()),
+			types.ErrorCodeGetChannelFailed,
+			http.StatusServiceUnavailable,
+			types.ErrOptionWithSkipRetry(),
+		)
+	}
+
+	retryParam := &service.RetryParam{
+		Ctx:        c,
+		TokenGroup: info.TokenGroup,
+		ModelName:  info.OriginModelName,
+		Retry:      common.GetPointer(0),
+		TokenLimit: tokenLimit,
+	}
+	selected, selectGroup, err := service.CacheGetRandomSatisfiedChannel(retryParam)
+	if err != nil {
+		return types.NewErrorWithStatusCode(
+			fmt.Errorf("failed to select channel with token limits, group=%s, model=%s: %w", selectGroup, info.OriginModelName, err),
+			types.ErrorCodeGetChannelFailed,
+			http.StatusServiceUnavailable,
+			types.ErrOptionWithSkipRetry(),
+		)
+	}
+	if selected == nil {
+		return types.NewErrorWithStatusCode(
+			fmt.Errorf("no available channel satisfies token limits, group=%s, model=%s, input_tokens=%d, max_tokens=%d", selectGroup, info.OriginModelName, inputTokens, maxTokens),
+			types.ErrorCodeGetChannelFailed,
+			http.StatusServiceUnavailable,
+			types.ErrOptionWithSkipRetry(),
+		)
+	}
+
+	logger.LogInfo(c, fmt.Sprintf("channel #%d skipped by token limit, switched to channel #%d", channel.Id, selected.Id))
+	return middleware.SetupContextForSelectedChannel(c, selected, info.OriginModelName)
 }
 
 func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service.RetryParam) (*model.Channel, *types.NewAPIError) {

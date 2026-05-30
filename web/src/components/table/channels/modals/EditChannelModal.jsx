@@ -174,7 +174,8 @@ const EditChannelModal = (props) => {
     type: 1,
     key: '',
     openai_organization: '',
-    max_input_tokens: 0,
+    max_context_tokens: 0,
+    max_output_tokens: 0,
     base_url: '',
     other: '',
     model_mapping: '',
@@ -1013,6 +1014,8 @@ const EditChannelModal = (props) => {
         (data.remark && data.remark.trim()) ||
         (data.priority && data.priority !== 0) ||
         (data.weight && data.weight !== 0) ||
+        (data.max_context_tokens && data.max_context_tokens !== 0) ||
+        (data.max_output_tokens && data.max_output_tokens !== 0) ||
         (data.proxy && data.proxy.trim()) ||
         (data.system_prompt && data.system_prompt.trim()) ||
         data.thinking_to_content ||
@@ -2504,6 +2507,9 @@ const EditChannelModal = (props) => {
                   {inputs.type === 1 && (
                     <Form.Switch field='force_format' label={t('强制格式化')} checkedText={t('开')} uncheckedText={t('关')} onChange={(value) => handleChannelSettingsChange('force_format', value)} extraText={t('强制将响应格式化为 OpenAI 标准格式（只适用于OpenAI渠道类型）')} />
                   )}
+
+                  <Form.InputNumber field='max_context_tokens' label={t('最大上下文')} min={0} step={1} onChange={(value) => handleInputChange('max_context_tokens', Number(value) || 0)} extraText={t('请求 input_tokens + max_tokens 大于等于该值时跳过此渠道，0 表示不限制')} />
+                  <Form.InputNumber field='max_output_tokens' label={t('最大输出')} min={0} step={1} onChange={(value) => handleInputChange('max_output_tokens', Number(value) || 0)} extraText={t('请求 max_tokens 大于该值时跳过此渠道，0 表示不限制')} />
 
                   <Form.Switch field='thinking_to_content' label={t('思考内容转换')} checkedText={t('开')} uncheckedText={t('关')} onChange={(value) => handleChannelSettingsChange('thinking_to_content', value)} extraText={t('将 reasoning_content 转换为 <think> 标签拼接到内容中')} />
                   <Form.Switch field='pass_through_body_enabled' label={t('透传请求体')} checkedText={t('开')} uncheckedText={t('关')} onChange={(value) => handleChannelSettingsChange('pass_through_body_enabled', value)} extraText={t('启用请求体透传功能')} />
