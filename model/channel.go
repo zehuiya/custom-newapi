@@ -29,6 +29,7 @@ type Channel struct {
 	Weight             *uint   `json:"weight" gorm:"default:0"`
 	MaxContextTokens   *int    `json:"max_context_tokens" gorm:"default:0"`
 	MaxOutputTokens    *int    `json:"max_output_tokens" gorm:"default:0"`
+	MinInputTokens     *int    `json:"min_input_tokens" gorm:"default:0"`
 	CreatedTime        int64   `json:"created_time" gorm:"bigint"`
 	TestTime           int64   `json:"test_time" gorm:"bigint"`
 	ResponseTime       int     `json:"response_time"` // in milliseconds
@@ -434,6 +435,13 @@ func (channel *Channel) GetMaxOutputTokens() int {
 		return 0
 	}
 	return *channel.MaxOutputTokens
+}
+
+func (channel *Channel) GetMinInputTokens() int {
+	if channel == nil || channel.MinInputTokens == nil {
+		return 0
+	}
+	return *channel.MinInputTokens
 }
 
 func (channel *Channel) GetBaseURL() string {

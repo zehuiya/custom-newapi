@@ -12,6 +12,9 @@ func (limit *ChannelTokenLimit) Satisfies(channel *Channel) bool {
 	if maxOutputTokens := channel.GetMaxOutputTokens(); maxOutputTokens > 0 && limit.MaxTokens > maxOutputTokens {
 		return false
 	}
+	if minInputTokens := channel.GetMinInputTokens(); minInputTokens > 0 && limit.InputTokens < minInputTokens {
+		return false
+	}
 	if maxContextTokens := channel.GetMaxContextTokens(); maxContextTokens > 0 && limit.InputTokens+limit.MaxTokens >= maxContextTokens {
 		return false
 	}

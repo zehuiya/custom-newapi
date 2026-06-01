@@ -28,6 +28,9 @@ func TestChannelTokenLimitSatisfies(t *testing.T) {
 	require.True(t, limit.Satisfies(&Channel{MaxContextTokens: intPtr(151), MaxOutputTokens: intPtr(50)}))
 	require.False(t, limit.Satisfies(&Channel{MaxContextTokens: intPtr(150)}))
 	require.False(t, limit.Satisfies(&Channel{MaxOutputTokens: intPtr(49)}))
+	require.True(t, limit.Satisfies(&Channel{MinInputTokens: intPtr(0)}))
+	require.True(t, limit.Satisfies(&Channel{MinInputTokens: intPtr(100)}))
+	require.False(t, limit.Satisfies(&Channel{MinInputTokens: intPtr(101)}))
 }
 
 func TestGetRandomSatisfiedChannelWithTokenLimitSkipsInvalidPriority(t *testing.T) {
@@ -51,7 +54,8 @@ func TestGetRandomSatisfiedChannelWithTokenLimitSkipsInvalidPriority(t *testing.
 			Id:              1,
 			Priority:        int64Ptr(100),
 			Weight:          uintPtr(1000),
-			MaxOutputTokens: intPtr(10),
+			MaxOutputTokens: intPtr(100),
+			MinInputTokens:  intPtr(100),
 		},
 		2: {
 			Id:              2,
@@ -61,9 +65,10 @@ func TestGetRandomSatisfiedChannelWithTokenLimitSkipsInvalidPriority(t *testing.
 		},
 	}
 
-	hasContextLimit, hasOutputLimit := TokenLimitedChannelFlagsForGroupModel("default", "test-model")
+	hasContextLimit, hasOutputLimit, hasMinInputLimit := TokenLimitedChannelFlagsForGroupModel("default", "test-model")
 	require.False(t, hasContextLimit)
 	require.True(t, hasOutputLimit)
+	require.True(t, hasMinInputLimit)
 
 	channel, err := GetRandomSatisfiedChannel("default", "test-model", 0)
 	require.NoError(t, err)
