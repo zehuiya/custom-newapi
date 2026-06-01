@@ -6,7 +6,6 @@ import (
 	"math/rand"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -24,17 +23,23 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-var rng = rand.New(rand.NewSource(time.Now().UnixNano()))
-
 // calculateCachedTokens 计算缓存token数量：随机抽取50-90%的输入作为缓存
 func calculateCachedTokens(totalPromptTokens int) int {
 	if totalPromptTokens == 0 {
 		return 0
 	}
 	// 生成50-90之间的随机整数百分比
-	percentage := rng.Intn(41) + 50 // 50到90之间的随机数
+	percentage := rand.Intn(41) + 50 // 50到90之间的随机数
 	cachedTokens := (totalPromptTokens * percentage) / 100
 	return cachedTokens
+}
+
+func injectSyntheticCacheInfoForOpenAIUsage(usage *dto.Usage) bool {
+	if usage == nil || usage.PromptTokens <= 0 || usage.PromptTokensDetails.CachedTokens != 0 {
+		return false
+	}
+	usage.PromptTokensDetails.CachedTokens = calculateCachedTokens(usage.PromptTokens)
+	return true
 }
 
 func sendStreamData(c *gin.Context, info *relaycommon.RelayInfo, data string, forceFormat bool, thinkToContent bool) error {
@@ -194,20 +199,13 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 
 	// 注入缓存信息到lastStreamData中（如果包含usage）
 	if containStreamUsage && info.ShouldInjectCacheInfo && usage != nil && usage.PromptTokensDetails.CachedTokens == 0 && usage.PromptTokens >= 4096 {
-		originalPromptTokens := usage.PromptTokens
-		cachedTokens := calculateCachedTokens(originalPromptTokens)
-		uncachedTokens := originalPromptTokens - cachedTokens
-
-		// 更新usage对象
-		usage.PromptTokens = uncachedTokens
-		usage.PromptTokensDetails.CachedTokens = cachedTokens
+		_ = injectSyntheticCacheInfoForOpenAIUsage(usage)
 
 		// 修改lastStreamData中的JSON
 		var lastStreamResponse dto.ChatCompletionsStreamResponse
 		if err := common.Unmarshal(common.StringToByteSlice(lastStreamData), &lastStreamResponse); err == nil {
 			if lastStreamResponse.Usage != nil {
-				lastStreamResponse.Usage.PromptTokens = uncachedTokens
-				lastStreamResponse.Usage.PromptTokensDetails.CachedTokens = cachedTokens
+				lastStreamResponse.Usage.PromptTokensDetails.CachedTokens = usage.PromptTokensDetails.CachedTokens
 				if modifiedData, err := common.Marshal(lastStreamResponse); err == nil {
 					lastStreamData = string(modifiedData)
 				}
@@ -312,16 +310,7 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 
 	// 注入缓存信息：如果渠道名包含cache、输入token>=4096、且上游未返回缓存数据
 	if info.ShouldInjectCacheInfo && simpleResponse.Usage.PromptTokensDetails.CachedTokens == 0 {
-		// 随机抽取50-90%的prompt token作为缓存token
-		originalPromptTokens := simpleResponse.Usage.PromptTokens
-		cachedTokens := calculateCachedTokens(originalPromptTokens)
-		uncachedTokens := originalPromptTokens - cachedTokens
-
-		// 更新usage：prompt_tokens变成未缓存的部分，cached_tokens是缓存的部分
-		simpleResponse.Usage.PromptTokens = uncachedTokens
-		simpleResponse.Usage.PromptTokensDetails.CachedTokens = cachedTokens
-		// total_tokens保持不变，因为 uncachedTokens + cachedTokens + completion = original
-		usageModified = true
+		usageModified = injectSyntheticCacheInfoForOpenAIUsage(&simpleResponse.Usage)
 	}
 
 	applyUsagePostProcessing(info, &simpleResponse.Usage, responseBody)

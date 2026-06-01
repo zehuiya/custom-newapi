@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -43,4 +44,36 @@ func TestOpenaiHandlerWithUsageDoesNotDoubleCountPromptAndInputTokens(t *testing
 	require.Equal(t, 5429, usage.TotalTokens)
 	require.Equal(t, 5376, usage.PromptTokensDetails.CachedTokens)
 	require.Equal(t, "openai", usage.UsageSemantic)
+}
+
+func TestSyntheticCacheInjectionKeepsOpenAIPromptTokensInclusive(t *testing.T) {
+	usage := &dto.Usage{
+		PromptTokens:     20785,
+		CompletionTokens: 104,
+		TotalTokens:      20889,
+	}
+
+	changed := injectSyntheticCacheInfoForOpenAIUsage(usage)
+
+	require.True(t, changed)
+	require.Equal(t, 20785, usage.PromptTokens)
+	require.Equal(t, 20889, usage.TotalTokens)
+	require.GreaterOrEqual(t, usage.PromptTokensDetails.CachedTokens, 20785*50/100)
+	require.LessOrEqual(t, usage.PromptTokensDetails.CachedTokens, 20785*90/100)
+	require.GreaterOrEqual(t, usage.PromptTokens-usage.PromptTokensDetails.CachedTokens, 0)
+}
+
+func TestSyntheticCacheInjectionDoesNotOverwriteUpstreamCacheTokens(t *testing.T) {
+	usage := &dto.Usage{
+		PromptTokens: 5000,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens: 1234,
+		},
+	}
+
+	changed := injectSyntheticCacheInfoForOpenAIUsage(usage)
+
+	require.False(t, changed)
+	require.Equal(t, 5000, usage.PromptTokens)
+	require.Equal(t, 1234, usage.PromptTokensDetails.CachedTokens)
 }

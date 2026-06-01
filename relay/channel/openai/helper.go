@@ -204,14 +204,7 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 
 	// 注入缓存信息：如果渠道名包含cache、输入token>=4096、且上游未返回缓存数据
 	if info.ShouldInjectCacheInfo && usage.PromptTokensDetails.CachedTokens == 0 {
-		// 随机抽取50-90%的prompt token作为缓存token
-		originalPromptTokens := usage.PromptTokens
-		cachedTokens := calculateCachedTokens(originalPromptTokens)
-		uncachedTokens := originalPromptTokens - cachedTokens
-
-		// 更新usage：prompt_tokens变成未缓存的部分，cached_tokens是缓存的部分
-		usage.PromptTokens = uncachedTokens
-		usage.PromptTokensDetails.CachedTokens = cachedTokens
+		_ = injectSyntheticCacheInfoForOpenAIUsage(usage)
 	}
 
 	switch info.RelayFormat {
