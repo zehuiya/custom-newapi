@@ -1,0 +1,65 @@
+service/text_quota.go
+  s_1bc543baba7bae::t_a34408e706158f 300-302
+relay/channel/openai/relay_openai_test.go
+  s_1bc543baba7bae::t_7692b8d571cc4d 84,96,119,128
+  s_1bc543baba7bae::t_bb28ea41892125 118,121,127,130,204-205
+  s_1bc543baba7bae::t_5104e493887718 217-219
+  s_1bc543baba7bae::t_1346be8abff986 10,13-14,82-83,85-95,97-117,120,122-126,129,131-136,182-203,206
+  s_1bc543baba7bae::t_40682254179982 137-181,207-216,220-238
+service/no_cache_usage.go
+  s_1bc543baba7bae::t_bec61376d1547c 62-64
+  s_1bc543baba7bae::t_b7b0d5854b69f4 1-61,65-74
+relay/channel/openai/chat_via_responses.go
+  s_1bc543baba7bae::t_fafd521d40a2b7 73-75,479,526
+relay/channel/openai/adaptor.go
+  s_1bc543baba7bae::t_a0495e1d9a732b 640
+relay/channel/claude/relay-claude.go
+  s_1bc543baba7bae::t_282b6bff62328d 1068,1090,1105-1108
+  s_1bc543baba7bae::t_d8723289b1a4e0 930,946-949,1000,1012,1122
+  s_1bc543baba7bae::t_df0cce231cb778 818
+relay/channel/openai/relay-openai.go
+  s_1bc543baba7bae::t_6069faf268ae15 45-64
+  s_1bc543baba7bae::t_d8723289b1a4e0 220-225,227-232,254,331,337-339
+  s_1bc543baba7bae::t_9462eb7b9b2647 684
+relay/channel/codex/adaptor.go
+  s_1bc543baba7bae::t_6d3996cc929663 120
+service/no_cache_usage_test.go
+  s_1bc543baba7bae::t_24092d199ac682 1-27,29-30,32-45,48,50-98,100-150,152-174
+  s_1bc543baba7bae::t_2f1c617df971ed 31,47
+  s_1bc543baba7bae::t_f690839d625669 28,46,49,99,151
+relay/cache_injection_test.go
+  s_1bc543baba7bae::t_d8723289b1a4e0 31-32,39-40,42-49,63-72,79-80,88,96,122,187-188,195-196,198-205,219-228,236,244,270
+relay/claude_handler.go
+  s_1bc543baba7bae::t_1c00aa7a465aea 50,52
+relay/compatible_handler.go
+  s_1bc543baba7bae::t_259ba9fa524436 68,70
+relay/channel/openai/relay_responses_compact.go
+  s_1bc543baba7bae::t_b1ab1a0eefe724 9,16,34-39,42-43
+relay/common/relay_info.go
+  s_1bc543baba7bae::t_80ba742f9681f4 109
+relay/channel/openai/helper.go
+  s_1bc543baba7bae::t_8d5d3269eaaad7 205,209
+relay/channel/claude/relay_claude_test.go
+  s_1bc543baba7bae::t_81c8010f7f291e 5-6,10,13-14,385-454
+  s_1bc543baba7bae::t_46fe9a5c086d35 457-465,468-492
+  s_1bc543baba7bae::t_f77af375ffaeed 466-467
+relay/channel/openai/relay_responses.go
+  s_1bc543baba7bae::t_0a7758aab47030 50-55,58-61,106-111,120-124,159-245
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.12",
+  "base_commit_sha": "12a19e90a66258b1ba925a72ac5d37a5d5e4c7c0",
+  "prompts": {},
+  "logical_commit_id": "12a19e90a66258b1ba925a72ac5d37a5d5e4c7c0",
+  "sessions": {
+    "s_1bc543baba7bae": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019e8d24-9d68-7d92-8df4-002039f583bd",
+        "model": "gpt-5.5"
+      },
+      "human_author": "xieqingxing <xieqingxing@bigo.sg>"
+    }
+  }
+}
