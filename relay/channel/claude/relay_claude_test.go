@@ -2,11 +2,16 @@ package claude
 
 import (
 	"encoding/base64"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/types"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
 
@@ -377,6 +382,114 @@ func TestNormalizeAnthropicInclusiveCacheUsageKeepsNormalAnthropicChannel(t *tes
 	require.Equal(t, 10088, openAIUsage.InputTokens)
 	require.Equal(t, 10089, openAIUsage.TotalTokens)
 	require.Equal(t, 9984, openAIUsage.PromptTokensDetails.CachedTokens)
+}
+
+func TestHandleClaudeResponseDataNoCacheNormalizesNativeUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	info := &relaycommon.RelayInfo{
+		RelayFormat: types.RelayFormatClaude,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelName: "claude-[no_cache]",
+		},
+	}
+	claudeInfo := &ClaudeResponseInfo{Usage: &dto.Usage{}}
+	data := []byte(`{
+		"id": "msg-test",
+		"type": "message",
+		"role": "assistant",
+		"model": "claude-test",
+		"content": [{"type": "text", "text": "ok"}],
+		"stop_reason": "end_turn",
+		"usage": {
+			"input_tokens": 100,
+			"cache_read_input_tokens": 30,
+			"output_tokens": 20
+		}
+	}`)
+
+	err := HandleClaudeResponseData(c, info, claudeInfo, &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+	}, data)
+
+	require.Nil(t, err)
+	require.Equal(t, 130, claudeInfo.Usage.PromptTokens)
+	require.Equal(t, 20, claudeInfo.Usage.CompletionTokens)
+	require.Equal(t, 150, claudeInfo.Usage.TotalTokens)
+	require.Equal(t, 0, claudeInfo.Usage.PromptTokensDetails.CachedTokens)
+
+	var body dto.ClaudeResponse
+	require.NoError(t, common.Unmarshal(w.Body.Bytes(), &body))
+	require.NotNil(t, body.Usage)
+	require.Equal(t, 130, body.Usage.InputTokens)
+	require.Equal(t, 0, body.Usage.CacheReadInputTokens)
+	require.Equal(t, 20, body.Usage.OutputTokens)
+}
+
+func TestHandleStreamResponseDataNoCacheNormalizesMessageDeltaUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	info := &relaycommon.RelayInfo{
+		RelayFormat: types.RelayFormatClaude,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelName: "claude-[no_cache]",
+		},
+	}
+	claudeInfo := &ClaudeResponseInfo{Usage: &dto.Usage{}}
+	data := `{"type":"message_delta","usage":{"input_tokens":100,"cache_read_input_tokens":30,"output_tokens":20},"delta":{"stop_reason":"end_turn"}}`
+
+	err := HandleStreamResponseData(c, info, claudeInfo, data)
+
+	require.Nil(t, err)
+	require.Equal(t, 130, claudeInfo.Usage.PromptTokens)
+	require.Equal(t, 20, claudeInfo.Usage.CompletionTokens)
+	require.Equal(t, 150, claudeInfo.Usage.TotalTokens)
+	require.Equal(t, 0, claudeInfo.Usage.PromptTokensDetails.CachedTokens)
+	require.Contains(t, w.Body.String(), `"input_tokens":130`)
+	require.Contains(t, w.Body.String(), `"cache_read_input_tokens":0`)
+}
+
+func TestHandleStreamFinalResponseNoCacheNormalizesOpenAIUsageChunk(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	info := &relaycommon.RelayInfo{
+		RelayFormat:        types.RelayFormatOpenAI,
+		ShouldIncludeUsage: true,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelName:       "claude-[no_cache]",
+			UpstreamModelName: "claude-test",
+		},
+	}
+	claudeInfo := &ClaudeResponseInfo{
+		ResponseId: "msg-test",
+		Model:      "claude-test",
+		Done:       true,
+		Usage: &dto.Usage{
+			PromptTokens:     100,
+			CompletionTokens: 20,
+			TotalTokens:      120,
+			PromptTokensDetails: dto.InputTokenDetails{
+				CachedTokens: 30,
+			},
+		},
+	}
+
+	HandleStreamFinalResponse(c, info, claudeInfo)
+
+	require.Equal(t, 130, claudeInfo.Usage.PromptTokens)
+	require.Equal(t, 20, claudeInfo.Usage.CompletionTokens)
+	require.Equal(t, 150, claudeInfo.Usage.TotalTokens)
+	require.Equal(t, 0, claudeInfo.Usage.PromptTokensDetails.CachedTokens)
+	require.Contains(t, w.Body.String(), `"prompt_tokens":130`)
+	require.Contains(t, w.Body.String(), `"total_tokens":150`)
+	require.Contains(t, w.Body.String(), `"cached_tokens":0`)
 }
 
 func TestRequestOpenAI2ClaudeMessage_IgnoresUnsupportedFileContent(t *testing.T) {

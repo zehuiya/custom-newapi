@@ -70,6 +70,9 @@ func OaiResponsesToChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		usage = service.ResponseText2Usage(c, text, info.UpstreamModelName, info.GetEstimatePromptTokens())
 		chatResp.Usage = *usage
 	}
+	if service.NormalizeNoCacheUsageForRelay(c, info, usage) {
+		chatResp.Usage = *usage
+	}
 
 	var responseBody []byte
 	switch info.RelayFormat {
@@ -473,6 +476,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 					if streamResp.Response.Usage.CompletionTokenDetails.ReasoningTokens != 0 {
 						usage.CompletionTokenDetails.ReasoningTokens = streamResp.Response.Usage.CompletionTokenDetails.ReasoningTokens
 					}
+					service.NormalizeNoCacheUsageForRelay(c, info, usage)
 				}
 			}
 
@@ -519,6 +523,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 	if usage.TotalTokens == 0 {
 		usage = service.ResponseText2Usage(c, usageText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
 	}
+	service.NormalizeNoCacheUsageForRelay(c, info, usage)
 
 	if !sentStart {
 		if !sendChatChunk(helper.GenerateStartEmptyResponse(responseId, createAt, model, nil)) {

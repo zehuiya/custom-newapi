@@ -28,17 +28,25 @@ func TestCacheInjectionOpenAI(t *testing.T) {
 		checkRange            bool // 是否检查缓存token在50-90%范围内
 	}{
 		{
-			name:                  "渠道名包含cache且token>=4096，上游无缓存数据，应注入50-90%",
-			channelName:           "test-cache-channel",
+			name:                  "渠道名包含[cache]且token>=4096，上游无缓存数据，应注入50-90%",
+			channelName:           "test-[cache]-channel",
 			estimatedTokens:       5000,
 			upstreamCachedTokens:  0,
 			shouldInjectCacheInfo: true,
 			checkRange:            true,
 		},
 		{
-			name:                  "渠道名包含cache但token<4096，不应注入",
-			channelName:           "test-cache-channel",
+			name:                  "渠道名包含[cache]但token<4096，不应注入",
+			channelName:           "test-[cache]-channel",
 			estimatedTokens:       3000,
+			upstreamCachedTokens:  0,
+			shouldInjectCacheInfo: false,
+			checkRange:            false,
+		},
+		{
+			name:                  "普通cache文本不应注入",
+			channelName:           "test-cache-channel",
+			estimatedTokens:       5000,
 			upstreamCachedTokens:  0,
 			shouldInjectCacheInfo: false,
 			checkRange:            false,
@@ -52,16 +60,24 @@ func TestCacheInjectionOpenAI(t *testing.T) {
 			checkRange:            false,
 		},
 		{
-			name:                  "渠道名包含cache且token>=4096，但上游已有缓存数据，不应覆盖",
-			channelName:           "test-cache-channel",
+			name:                  "[no_cache]不应触发[cache]注入",
+			channelName:           "test-[no_cache]-channel",
+			estimatedTokens:       5000,
+			upstreamCachedTokens:  0,
+			shouldInjectCacheInfo: false,
+			checkRange:            false,
+		},
+		{
+			name:                  "渠道名包含[cache]且token>=4096，但上游已有缓存数据，不应覆盖",
+			channelName:           "test-[cache]-channel",
 			estimatedTokens:       5000,
 			upstreamCachedTokens:  3000,
 			shouldInjectCacheInfo: true,
 			checkRange:            false,
 		},
 		{
-			name:                  "渠道名大写CACHE也应该匹配",
-			channelName:           "test-CACHE-channel",
+			name:                  "渠道名大写[CACHE]也应该匹配",
+			channelName:           "test-[CACHE]-channel",
 			estimatedTokens:       5000,
 			upstreamCachedTokens:  0,
 			shouldInjectCacheInfo: true,
@@ -69,7 +85,7 @@ func TestCacheInjectionOpenAI(t *testing.T) {
 		},
 		{
 			name:                  "测试边界值4096token的情况",
-			channelName:           "openai-cache",
+			channelName:           "openai-[cache]",
 			estimatedTokens:       4096,
 			upstreamCachedTokens:  0,
 			shouldInjectCacheInfo: true,
@@ -77,7 +93,7 @@ func TestCacheInjectionOpenAI(t *testing.T) {
 		},
 		{
 			name:                  "测试10000token的情况",
-			channelName:           "openai-cache",
+			channelName:           "openai-[cache]",
 			estimatedTokens:       10000,
 			upstreamCachedTokens:  0,
 			shouldInjectCacheInfo: true,
@@ -103,7 +119,7 @@ func TestCacheInjectionOpenAI(t *testing.T) {
 
 			// 模拟TextHelper中的逻辑来设置ShouldInjectCacheInfo
 			channelName := common.GetContextKeyString(c, constant.ContextKeyChannelName)
-			if strings.Contains(strings.ToLower(channelName), "cache") && info.GetEstimatePromptTokens() >= 4096 {
+			if strings.Contains(strings.ToLower(channelName), "[cache]") && info.GetEstimatePromptTokens() >= 4096 {
 				info.ShouldInjectCacheInfo = true
 			}
 
@@ -168,17 +184,25 @@ func TestCacheInjectionClaude(t *testing.T) {
 		checkRange              bool // 是否检查缓存token在50-90%范围内
 	}{
 		{
-			name:                    "渠道名包含cache且token>=4096，上游无缓存数据，应注入50-90%",
-			channelName:             "claude-cache-test",
+			name:                    "渠道名包含[cache]且token>=4096，上游无缓存数据，应注入50-90%",
+			channelName:             "claude-[cache]-test",
 			estimatedTokens:         5000,
 			upstreamCacheReadTokens: 0,
 			shouldInjectCacheInfo:   true,
 			checkRange:              true,
 		},
 		{
-			name:                    "渠道名包含cache但token<4096，不应注入",
-			channelName:             "claude-cache-test",
+			name:                    "渠道名包含[cache]但token<4096，不应注入",
+			channelName:             "claude-[cache]-test",
 			estimatedTokens:         3000,
+			upstreamCacheReadTokens: 0,
+			shouldInjectCacheInfo:   false,
+			checkRange:              false,
+		},
+		{
+			name:                    "普通cache文本不应注入",
+			channelName:             "claude-cache-test",
+			estimatedTokens:         5000,
 			upstreamCacheReadTokens: 0,
 			shouldInjectCacheInfo:   false,
 			checkRange:              false,
@@ -192,8 +216,16 @@ func TestCacheInjectionClaude(t *testing.T) {
 			checkRange:              false,
 		},
 		{
-			name:                    "渠道名包含cache且token>=4096，但上游已有缓存数据，不应覆盖",
-			channelName:             "claude-cache-test",
+			name:                    "[no_cache]不应触发[cache]注入",
+			channelName:             "claude-[no_cache]-test",
+			estimatedTokens:         5000,
+			upstreamCacheReadTokens: 0,
+			shouldInjectCacheInfo:   false,
+			checkRange:              false,
+		},
+		{
+			name:                    "渠道名包含[cache]且token>=4096，但上游已有缓存数据，不应覆盖",
+			channelName:             "claude-[cache]-test",
 			estimatedTokens:         5000,
 			upstreamCacheReadTokens: 3000,
 			shouldInjectCacheInfo:   true,
@@ -201,7 +233,7 @@ func TestCacheInjectionClaude(t *testing.T) {
 		},
 		{
 			name:                    "测试边界值4096token的情况",
-			channelName:             "claude-cache",
+			channelName:             "claude-[cache]",
 			estimatedTokens:         4096,
 			upstreamCacheReadTokens: 0,
 			shouldInjectCacheInfo:   true,
@@ -209,7 +241,7 @@ func TestCacheInjectionClaude(t *testing.T) {
 		},
 		{
 			name:                    "测试10000token的情况",
-			channelName:             "claude-cache",
+			channelName:             "claude-[cache]",
 			estimatedTokens:         10000,
 			upstreamCacheReadTokens: 0,
 			shouldInjectCacheInfo:   true,
@@ -235,7 +267,7 @@ func TestCacheInjectionClaude(t *testing.T) {
 
 			// 模拟ClaudeHelper中的逻辑来设置ShouldInjectCacheInfo
 			channelName := common.GetContextKeyString(c, constant.ContextKeyChannelName)
-			if strings.Contains(strings.ToLower(channelName), "cache") && info.GetEstimatePromptTokens() >= 4096 {
+			if strings.Contains(strings.ToLower(channelName), "[cache]") && info.GetEstimatePromptTokens() >= 4096 {
 				info.ShouldInjectCacheInfo = true
 			}
 

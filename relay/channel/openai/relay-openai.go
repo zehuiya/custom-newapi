@@ -42,6 +42,26 @@ func injectSyntheticCacheInfoForOpenAIUsage(usage *dto.Usage) bool {
 	return true
 }
 
+func rewriteOpenAIStreamUsageData(data string, usage *dto.Usage) string {
+	if data == "" || usage == nil {
+		return data
+	}
+
+	var streamResponse dto.ChatCompletionsStreamResponse
+	if err := common.Unmarshal(common.StringToByteSlice(data), &streamResponse); err != nil {
+		return data
+	}
+	if streamResponse.Usage == nil {
+		return data
+	}
+	streamResponse.Usage = usage
+	modifiedData, err := common.Marshal(streamResponse)
+	if err != nil {
+		return data
+	}
+	return string(modifiedData)
+}
+
 func sendStreamData(c *gin.Context, info *relaycommon.RelayInfo, data string, forceFormat bool, thinkToContent bool) error {
 	if data == "" {
 		return nil
@@ -197,19 +217,18 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		logger.LogError(c, fmt.Sprintf("error handling last response: %s, lastStreamData: [%s]", err.Error(), lastStreamData))
 	}
 
-	// 注入缓存信息到lastStreamData中（如果包含usage）
-	if containStreamUsage && info.ShouldInjectCacheInfo && usage != nil && usage.PromptTokensDetails.CachedTokens == 0 && usage.PromptTokens >= 4096 {
-		_ = injectSyntheticCacheInfoForOpenAIUsage(usage)
-
-		// 修改lastStreamData中的JSON
-		var lastStreamResponse dto.ChatCompletionsStreamResponse
-		if err := common.Unmarshal(common.StringToByteSlice(lastStreamData), &lastStreamResponse); err == nil {
-			if lastStreamResponse.Usage != nil {
-				lastStreamResponse.Usage.PromptTokensDetails.CachedTokens = usage.PromptTokensDetails.CachedTokens
-				if modifiedData, err := common.Marshal(lastStreamResponse); err == nil {
-					lastStreamData = string(modifiedData)
-				}
-			}
+	// 注入/归一化缓存信息到lastStreamData中（如果包含usage）
+	if containStreamUsage && usage != nil {
+		applyUsagePostProcessing(info, usage, common.StringToByteSlice(lastStreamData))
+		usageModifiedInLastStream := false
+		if info.ShouldInjectCacheInfo && usage.PromptTokensDetails.CachedTokens == 0 && usage.PromptTokens >= 4096 {
+			usageModifiedInLastStream = injectSyntheticCacheInfoForOpenAIUsage(usage)
+		}
+		if service.NormalizeNoCacheUsageForRelay(c, info, usage) {
+			usageModifiedInLastStream = true
+		}
+		if usageModifiedInLastStream {
+			lastStreamData = rewriteOpenAIStreamUsageData(lastStreamData, usage)
 		}
 	}
 
@@ -232,6 +251,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	}
 
 	applyUsagePostProcessing(info, usage, common.StringToByteSlice(lastStreamData))
+	service.NormalizeNoCacheUsageForRelay(c, info, usage)
 
 	HandleFinalResponse(c, info, lastStreamData, responseId, createAt, model, systemFingerprint, usage, containStreamUsage)
 	markOpenAIUsageSemantic(usage)
@@ -308,12 +328,15 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 		usageModified = true
 	}
 
-	// 注入缓存信息：如果渠道名包含cache、输入token>=4096、且上游未返回缓存数据
+	// 注入缓存信息：如果渠道名包含[cache]、输入token>=4096、且上游未返回缓存数据
 	if info.ShouldInjectCacheInfo && simpleResponse.Usage.PromptTokensDetails.CachedTokens == 0 {
 		usageModified = injectSyntheticCacheInfoForOpenAIUsage(&simpleResponse.Usage)
 	}
 
 	applyUsagePostProcessing(info, &simpleResponse.Usage, responseBody)
+	if service.NormalizeNoCacheUsageForRelay(c, info, &simpleResponse.Usage) {
+		usageModified = true
+	}
 	normalizeReasoning := shouldNormalizeOpenAIReasoning(info)
 	if normalizeReasoning {
 		normalizeReasoningContentInTextResponse(&simpleResponse)
@@ -658,6 +681,7 @@ func OpenaiHandlerWithUsage(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 		usageResp.PromptTokensDetails.TextTokens += usageResp.InputTokensDetails.TextTokens
 	}
 	applyUsagePostProcessing(info, &usageResp.Usage, responseBody)
+	service.NormalizeNoCacheUsageForRelay(c, info, &usageResp.Usage)
 	markOpenAIUsageSemantic(&usageResp.Usage)
 	return &usageResp.Usage, nil
 }

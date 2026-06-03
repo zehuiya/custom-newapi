@@ -65,9 +65,9 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 
 	info.ShouldIncludeUsage = includeUsage
 
-	// 检查是否需要注入缓存信息：渠道名包含cache且输入token>=4096
+	// 检查是否需要注入缓存信息：渠道名包含[cache]且输入token>=4096
 	channelName := common.GetContextKeyString(c, constant.ContextKeyChannelName)
-	if strings.Contains(strings.ToLower(channelName), "cache") && info.GetEstimatePromptTokens() >= 4096 {
+	if strings.Contains(strings.ToLower(channelName), "[cache]") && info.GetEstimatePromptTokens() >= 4096 {
 		info.ShouldInjectCacheInfo = true
 	}
 

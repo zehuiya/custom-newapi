@@ -6,13 +6,14 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
 
-func OaiResponsesCompactionHandler(c *gin.Context, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+func OaiResponsesCompactionHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	defer service.CloseResponseBodyGracefully(resp)
 
 	responseBody, err := io.ReadAll(resp.Body)
@@ -28,17 +29,18 @@ func OaiResponsesCompactionHandler(c *gin.Context, resp *http.Response) (*dto.Us
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 
-	service.IOCopyBytesGracefully(c, resp, responseBody)
-
 	usage := dto.Usage{}
 	if compactResp.Usage != nil {
-		usage.PromptTokens = compactResp.Usage.InputTokens
-		usage.CompletionTokens = compactResp.Usage.OutputTokens
-		usage.TotalTokens = compactResp.Usage.TotalTokens
-		if compactResp.Usage.InputTokensDetails != nil {
-			usage.PromptTokensDetails.CachedTokens = compactResp.Usage.InputTokensDetails.CachedTokens
+		fillRelayUsageFromResponsesUsage(&usage, compactResp.Usage)
+		if service.NormalizeNoCacheUsageForRelay(c, info, &usage) {
+			syncResponsesUsageFieldsFromRelayUsage(compactResp.Usage, &usage)
+			if modifiedBody, changed := rewriteResponsesUsagePayload(responseBody, false, &usage); changed {
+				responseBody = modifiedBody
+			}
 		}
 	}
+
+	service.IOCopyBytesGracefully(c, resp, responseBody)
 
 	markOpenAIUsageSemantic(&usage)
 	return &usage, nil

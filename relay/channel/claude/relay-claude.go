@@ -815,7 +815,7 @@ func rewriteClaudeUsageData(data string, usage *dto.ClaudeUsage) string {
 	if usage.OutputTokens > 0 {
 		usageMap["output_tokens"] = usage.OutputTokens
 	}
-	if usage.CacheReadInputTokens > 0 {
+	if usage.CacheReadInputTokens > 0 || usage.InputTokens > 0 {
 		usageMap["cache_read_input_tokens"] = usage.CacheReadInputTokens
 	}
 	if usage.CacheCreationInputTokens > 0 {
@@ -927,7 +927,7 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 					data = rewriteClaudeUsageData(data, claudeResponse.Usage)
 				}
 			}
-			// 注入缓存信息到message_delta事件：如果渠道名包含cache、输入token>=4096、且上游未返回缓存数据
+			// 注入缓存信息到message_delta事件：如果渠道名包含[cache]、输入token>=4096、且上游未返回缓存数据
 			if info.ShouldInjectCacheInfo && claudeResponse.Usage != nil && claudeResponse.Usage.CacheReadInputTokens == 0 && claudeInfo.Usage != nil && claudeInfo.Usage.PromptTokens > 0 {
 				originalInputTokens := claudeInfo.Usage.PromptTokens
 				cachedTokens := calculateCachedTokens(originalInputTokens)
@@ -941,6 +941,10 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 				claudeInfo.Usage.PromptTokensDetails.CachedTokens = cachedTokens
 				claudeInfo.Usage.TotalTokens = uncachedTokens + claudeInfo.Usage.CompletionTokens
 
+				data = rewriteClaudeUsageData(data, claudeResponse.Usage)
+			}
+			if service.NormalizeNoCacheUsageForRelay(c, info, claudeInfo.Usage) && claudeResponse.Usage != nil {
+				syncClaudeUsageFieldsFromRelayUsage(claudeResponse.Usage, claudeInfo.Usage)
 				data = rewriteClaudeUsageData(data, claudeResponse.Usage)
 			}
 			// 确保 message_delta 的 usage 包含完整的 input_tokens 和 cache 相关字段
@@ -993,7 +997,7 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 	}
 	normalizeAnthropicInclusiveCacheUsage(info, claudeInfo.Usage)
 
-	// 注入缓存信息：如果渠道名包含cache、输入token>=4096、且上游未返回缓存数据
+	// 注入缓存信息：如果渠道名包含[cache]、输入token>=4096、且上游未返回缓存数据
 	if info.ShouldInjectCacheInfo && claudeInfo.Usage.PromptTokensDetails.CachedTokens == 0 && claudeInfo.Usage.PromptTokens >= 4096 {
 		// 随机抽取50-90%的prompt token作为缓存token
 		originalPromptTokens := claudeInfo.Usage.PromptTokens
@@ -1005,6 +1009,7 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 		claudeInfo.Usage.PromptTokensDetails.CachedTokens = cachedTokens
 		claudeInfo.Usage.TotalTokens = uncachedTokens + claudeInfo.Usage.CompletionTokens
 	}
+	service.NormalizeNoCacheUsageForRelay(c, info, claudeInfo.Usage)
 
 	if info.RelayFormat == types.RelayFormatClaude {
 		//
@@ -1060,6 +1065,7 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	if claudeInfo.Usage == nil {
 		claudeInfo.Usage = &dto.Usage{}
 	}
+	noCacheNormalized := false
 	if claudeResponse.Usage != nil {
 		mergeClaudeUsageIntoRelayUsage(claudeInfo.Usage, claudeResponse.Usage)
 
@@ -1081,7 +1087,7 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 			syncClaudeUsageFieldsFromRelayUsage(claudeResponse.Usage, claudeInfo.Usage)
 		}
 
-		// 注入缓存信息：如果渠道名包含cache、输入token>=4096、且上游未返回缓存数据
+		// 注入缓存信息：如果渠道名包含[cache]、输入token>=4096、且上游未返回缓存数据
 		if info.ShouldInjectCacheInfo && claudeResponse.Usage.CacheReadInputTokens == 0 {
 			// 随机抽取50-90%的input token作为缓存读取token
 			originalInputTokens := claudeResponse.Usage.InputTokens
@@ -1097,6 +1103,10 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 			claudeInfo.Usage.PromptTokensDetails.CachedTokens = cachedTokens
 			claudeInfo.Usage.TotalTokens = uncachedTokens + claudeResponse.Usage.OutputTokens
 		}
+		noCacheNormalized = service.NormalizeNoCacheUsageForRelay(c, info, claudeInfo.Usage)
+		if noCacheNormalized {
+			syncClaudeUsageFieldsFromRelayUsage(claudeResponse.Usage, claudeInfo.Usage)
+		}
 	}
 	var responseData []byte
 	switch info.RelayFormat {
@@ -1109,7 +1119,7 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		}
 	case types.RelayFormatClaude:
 		// 如果注入了缓存信息，需要修改原始响应数据
-		if claudeResponse.Usage != nil && (claudeInfo.Usage.UsageSource == normalizedAnthropicInclusiveCacheUsageSource || info.ShouldInjectCacheInfo && claudeResponse.Usage.CacheReadInputTokens > 0) {
+		if claudeResponse.Usage != nil && (claudeInfo.Usage.UsageSource == normalizedAnthropicInclusiveCacheUsageSource || info.ShouldInjectCacheInfo && claudeResponse.Usage.CacheReadInputTokens > 0 || noCacheNormalized) {
 			var rawData map[string]interface{}
 			if err := common.Unmarshal(data, &rawData); err == nil {
 				if usageMap, ok := rawData["usage"].(map[string]interface{}); ok {

@@ -202,10 +202,11 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 		info.UpstreamResponseId = responseId
 	}
 
-	// 注入缓存信息：如果渠道名包含cache、输入token>=4096、且上游未返回缓存数据
+	// 注入缓存信息：如果渠道名包含[cache]、输入token>=4096、且上游未返回缓存数据
 	if info.ShouldInjectCacheInfo && usage.PromptTokensDetails.CachedTokens == 0 {
 		_ = injectSyntheticCacheInfoForOpenAIUsage(usage)
 	}
+	service.NormalizeNoCacheUsageForRelay(c, info, usage)
 
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAI:

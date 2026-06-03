@@ -44,19 +44,21 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		c.Set("image_generation_call_size", responsesResponse.GetSize())
 	}
 
-	// 写入新的 response body
-	service.IOCopyBytesGracefully(c, resp, responseBody)
-
 	// compute usage
 	usage := dto.Usage{}
 	if responsesResponse.Usage != nil {
-		usage.PromptTokens = responsesResponse.Usage.InputTokens
-		usage.CompletionTokens = responsesResponse.Usage.OutputTokens
-		usage.TotalTokens = responsesResponse.Usage.TotalTokens
-		if responsesResponse.Usage.InputTokensDetails != nil {
-			usage.PromptTokensDetails.CachedTokens = responsesResponse.Usage.InputTokensDetails.CachedTokens
+		fillRelayUsageFromResponsesUsage(&usage, responsesResponse.Usage)
+		if service.NormalizeNoCacheUsageForRelay(c, info, &usage) {
+			syncResponsesUsageFieldsFromRelayUsage(responsesResponse.Usage, &usage)
+			if modifiedBody, changed := rewriteResponsesUsagePayload(responseBody, false, &usage); changed {
+				responseBody = modifiedBody
+			}
 		}
 	}
+
+	// 写入新的 response body
+	service.IOCopyBytesGracefully(c, resp, responseBody)
+
 	if info == nil || info.ResponsesUsageInfo == nil || info.ResponsesUsageInfo.BuiltInTools == nil {
 		markOpenAIUsageSemantic(&usage)
 		return &usage, nil
@@ -94,7 +96,6 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			sr.Error(err)
 			return
 		}
-		sendResponsesStreamData(c, streamResponse, data)
 		switch streamResponse.Type {
 		case "response.completed":
 			if streamResponse.Response != nil {
@@ -102,17 +103,12 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 					info.UpstreamResponseId = streamResponse.Response.ID
 				}
 				if streamResponse.Response.Usage != nil {
-					if streamResponse.Response.Usage.InputTokens != 0 {
-						usage.PromptTokens = streamResponse.Response.Usage.InputTokens
-					}
-					if streamResponse.Response.Usage.OutputTokens != 0 {
-						usage.CompletionTokens = streamResponse.Response.Usage.OutputTokens
-					}
-					if streamResponse.Response.Usage.TotalTokens != 0 {
-						usage.TotalTokens = streamResponse.Response.Usage.TotalTokens
-					}
-					if streamResponse.Response.Usage.InputTokensDetails != nil {
-						usage.PromptTokensDetails.CachedTokens = streamResponse.Response.Usage.InputTokensDetails.CachedTokens
+					fillRelayUsageFromResponsesUsage(usage, streamResponse.Response.Usage)
+					if service.NormalizeNoCacheUsageForRelay(c, info, usage) {
+						syncResponsesUsageFieldsFromRelayUsage(streamResponse.Response.Usage, usage)
+						if modifiedData, changed := rewriteResponsesUsagePayload(common.StringToByteSlice(data), true, usage); changed {
+							data = string(modifiedData)
+						}
 					}
 				}
 				if streamResponse.Response.HasImageGenerationCall() {
@@ -121,6 +117,11 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 					c.Set("image_generation_call_size", streamResponse.Response.GetSize())
 				}
 			}
+		}
+
+		sendResponsesStreamData(c, streamResponse, data)
+
+		switch streamResponse.Type {
 		case "response.output_text.delta":
 			responseTextBuilder.WriteString(streamResponse.Delta)
 		case dto.ResponsesOutputTypeItemDone:
@@ -155,4 +156,91 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 
 	markOpenAIUsageSemantic(usage)
 	return usage, nil
+}
+
+func fillRelayUsageFromResponsesUsage(usage *dto.Usage, responsesUsage *dto.Usage) {
+	if usage == nil || responsesUsage == nil {
+		return
+	}
+	if responsesUsage.InputTokens != 0 {
+		usage.PromptTokens = responsesUsage.InputTokens
+		usage.InputTokens = responsesUsage.InputTokens
+	}
+	if responsesUsage.OutputTokens != 0 {
+		usage.CompletionTokens = responsesUsage.OutputTokens
+		usage.OutputTokens = responsesUsage.OutputTokens
+	}
+	if responsesUsage.TotalTokens != 0 {
+		usage.TotalTokens = responsesUsage.TotalTokens
+	} else {
+		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	}
+	if responsesUsage.InputTokensDetails != nil {
+		inputDetails := *responsesUsage.InputTokensDetails
+		usage.InputTokensDetails = &inputDetails
+		usage.PromptTokensDetails.CachedTokens = inputDetails.CachedTokens
+		usage.PromptTokensDetails.ImageTokens = inputDetails.ImageTokens
+		usage.PromptTokensDetails.AudioTokens = inputDetails.AudioTokens
+	}
+	if responsesUsage.CompletionTokenDetails.ReasoningTokens != 0 {
+		usage.CompletionTokenDetails.ReasoningTokens = responsesUsage.CompletionTokenDetails.ReasoningTokens
+	}
+}
+
+func syncResponsesUsageFieldsFromRelayUsage(responsesUsage *dto.Usage, usage *dto.Usage) {
+	if responsesUsage == nil || usage == nil {
+		return
+	}
+	responsesUsage.InputTokens = usage.PromptTokens
+	responsesUsage.OutputTokens = usage.CompletionTokens
+	responsesUsage.TotalTokens = usage.TotalTokens
+	if responsesUsage.InputTokensDetails == nil {
+		responsesUsage.InputTokensDetails = &dto.InputTokenDetails{}
+	}
+	responsesUsage.InputTokensDetails.CachedTokens = usage.PromptTokensDetails.CachedTokens
+	responsesUsage.InputTokensDetails.ImageTokens = usage.PromptTokensDetails.ImageTokens
+	responsesUsage.InputTokensDetails.AudioTokens = usage.PromptTokensDetails.AudioTokens
+}
+
+func rewriteResponsesUsagePayload(data []byte, nestedResponse bool, usage *dto.Usage) ([]byte, bool) {
+	if len(data) == 0 || usage == nil {
+		return data, false
+	}
+
+	var payload map[string]interface{}
+	if err := common.Unmarshal(data, &payload); err != nil {
+		return data, false
+	}
+
+	usageContainer := payload
+	if nestedResponse {
+		responseMap, ok := payload["response"].(map[string]interface{})
+		if !ok {
+			return data, false
+		}
+		usageContainer = responseMap
+	}
+
+	usageMap, ok := usageContainer["usage"].(map[string]interface{})
+	if !ok {
+		return data, false
+	}
+	usageMap["input_tokens"] = usage.PromptTokens
+	usageMap["output_tokens"] = usage.CompletionTokens
+	usageMap["total_tokens"] = usage.TotalTokens
+
+	inputDetails, ok := usageMap["input_tokens_details"].(map[string]interface{})
+	if ok {
+		inputDetails["cached_tokens"] = usage.PromptTokensDetails.CachedTokens
+	} else {
+		usageMap["input_tokens_details"] = map[string]interface{}{
+			"cached_tokens": usage.PromptTokensDetails.CachedTokens,
+		}
+	}
+
+	modifiedData, err := common.Marshal(payload)
+	if err != nil {
+		return data, false
+	}
+	return modifiedData, true
 }
