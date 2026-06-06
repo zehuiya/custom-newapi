@@ -809,6 +809,43 @@ func rewriteClaudeUsageData(data string, usage *dto.ClaudeUsage) string {
 	if !ok {
 		return data
 	}
+	applyClaudeUsageToMap(usageMap, usage)
+	rawData["usage"] = usageMap
+	modifiedData, err := common.Marshal(rawData)
+	if err != nil {
+		return data
+	}
+	return string(modifiedData)
+}
+
+func rewriteClaudeMessageStartUsageData(data string, usage *dto.ClaudeUsage) string {
+	if data == "" || usage == nil {
+		return data
+	}
+
+	var rawData map[string]interface{}
+	if err := common.UnmarshalJsonStr(data, &rawData); err != nil {
+		return data
+	}
+	messageMap, ok := rawData["message"].(map[string]interface{})
+	if !ok {
+		return data
+	}
+	usageMap, ok := messageMap["usage"].(map[string]interface{})
+	if !ok {
+		return data
+	}
+	applyClaudeUsageToMap(usageMap, usage)
+	messageMap["usage"] = usageMap
+	rawData["message"] = messageMap
+	modifiedData, err := common.Marshal(rawData)
+	if err != nil {
+		return data
+	}
+	return string(modifiedData)
+}
+
+func applyClaudeUsageToMap(usageMap map[string]interface{}, usage *dto.ClaudeUsage) {
 	if usage.InputTokens > 0 {
 		usageMap["input_tokens"] = usage.InputTokens
 	}
@@ -821,12 +858,6 @@ func rewriteClaudeUsageData(data string, usage *dto.ClaudeUsage) string {
 	if usage.CacheCreationInputTokens > 0 {
 		usageMap["cache_creation_input_tokens"] = usage.CacheCreationInputTokens
 	}
-	rawData["usage"] = usageMap
-	modifiedData, err := common.Marshal(rawData)
-	if err != nil {
-		return data
-	}
-	return string(modifiedData)
 }
 
 func setMessageDeltaUsageInt(data string, path string, localValue int) string {
@@ -914,6 +945,10 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		if claudeResponse.Type == "message_start" {
 			if claudeResponse.Message != nil {
 				info.UpstreamModelName = claudeResponse.Message.Model
+				if claudeResponse.Message.Usage != nil && service.NormalizeNoCacheUsageForRelay(c, info, claudeInfo.Usage) {
+					syncClaudeUsageFieldsFromRelayUsage(claudeResponse.Message.Usage, claudeInfo.Usage)
+					data = rewriteClaudeMessageStartUsageData(data, claudeResponse.Message.Usage)
+				}
 			}
 		} else if claudeResponse.Type == "message_delta" {
 			if claudeInfo.Usage != nil && claudeInfo.Usage.PromptTokens == 0 {
