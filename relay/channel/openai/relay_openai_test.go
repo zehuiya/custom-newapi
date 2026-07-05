@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -8,8 +9,10 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -204,6 +207,85 @@ func TestRewriteOpenAIStreamUsageDataWithNoCacheUsage(t *testing.T) {
 	require.Equal(t, 160, streamResp.Usage.PromptTokens)
 	require.Equal(t, 180, streamResp.Usage.TotalTokens)
 	require.Equal(t, 0, streamResp.Usage.PromptTokensDetails.CachedTokens)
+}
+
+func TestOpenaiHandlerFillsMissingReasoningTokens(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	reasoningText := "hidden reasoning content"
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body: io.NopCloser(strings.NewReader(`{
+			"id": "chatcmpl-test",
+			"model": "test-model",
+			"choices": [{
+				"index": 0,
+				"message": {"role": "assistant", "content": "ok", "reasoning_content": "` + reasoningText + `"},
+				"finish_reason": "stop"
+			}],
+			"usage": {
+				"prompt_tokens": 10,
+				"completion_tokens": 5,
+				"total_tokens": 15,
+				"completion_tokens_details": {"reasoning_tokens": 0}
+			}
+		}`)),
+	}
+
+	usage, err := OpenaiHandler(c, &relaycommon.RelayInfo{
+		RelayFormat: types.RelayFormatOpenAI,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "test-model",
+		},
+	}, resp)
+
+	expected := service.CountTextToken(reasoningText, "test-model")
+	require.Nil(t, err)
+	require.Equal(t, expected, usage.CompletionTokenDetails.ReasoningTokens)
+
+	var body dto.OpenAITextResponse
+	require.NoError(t, common.Unmarshal(w.Body.Bytes(), &body))
+	require.Equal(t, expected, body.Usage.CompletionTokenDetails.ReasoningTokens)
+}
+
+func TestOaiStreamHandlerFillsMissingReasoningTokensInUsageChunk(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oldStreamingTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() {
+		constant.StreamingTimeout = oldStreamingTimeout
+	})
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	reasoningText := "hidden stream reasoning"
+	sse := strings.Join([]string{
+		`data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"hidden stream "},"finish_reason":null}]}`,
+		`data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{"reasoning_content":"reasoning","content":"ok"},"finish_reason":null}]}`,
+		`data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15,"completion_tokens_details":{"reasoning_tokens":0}}}`,
+		`data: [DONE]`,
+	}, "\n\n")
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(sse)),
+	}
+
+	usage, err := OaiStreamHandler(c, &relaycommon.RelayInfo{
+		RelayFormat:        types.RelayFormatOpenAI,
+		RelayMode:          relayconstant.RelayModeChatCompletions,
+		ShouldIncludeUsage: true,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "test-model",
+		},
+	}, resp)
+
+	expected := service.CountTextToken(reasoningText, "test-model")
+	require.Nil(t, err)
+	require.Equal(t, expected, usage.CompletionTokenDetails.ReasoningTokens)
+	require.Contains(t, w.Body.String(), fmt.Sprintf(`"reasoning_tokens":%d`, expected))
 }
 
 func TestRewriteResponsesUsagePayloadWithNoCacheStreamUsage(t *testing.T) {

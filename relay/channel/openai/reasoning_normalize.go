@@ -1,6 +1,8 @@
 package openai
 
 import (
+	"strings"
+
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
@@ -114,4 +116,36 @@ func normalizeReasoningContentInStreamResponse(response *dto.ChatCompletionsStre
 		changed = true
 	}
 	return changed
+}
+
+func collectReasoningContentFromOpenAIResponse(response *dto.OpenAITextResponse) string {
+	if response == nil {
+		return ""
+	}
+
+	var reasoningText strings.Builder
+	for _, choice := range response.Choices {
+		if choice.Message.ReasoningContent != "" {
+			reasoningText.WriteString(choice.Message.ReasoningContent)
+			continue
+		}
+		if choice.Message.Reasoning != "" {
+			reasoningText.WriteString(choice.Message.Reasoning)
+		}
+	}
+	return reasoningText.String()
+}
+
+func collectReasoningContentFromOpenAIStreamItems(streamItems []string) string {
+	var reasoningText strings.Builder
+	for _, item := range streamItems {
+		var streamResponse dto.ChatCompletionsStreamResponse
+		if err := common.UnmarshalJsonStr(item, &streamResponse); err != nil {
+			continue
+		}
+		for _, choice := range streamResponse.Choices {
+			reasoningText.WriteString(choice.Delta.GetReasoningContent())
+		}
+	}
+	return reasoningText.String()
 }

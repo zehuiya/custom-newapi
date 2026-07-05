@@ -595,12 +595,34 @@ func ResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.OpenAITextRe
 }
 
 type ClaudeResponseInfo struct {
-	ResponseId   string
-	Created      int64
-	Model        string
-	ResponseText strings.Builder
-	Usage        *dto.Usage
-	Done         bool
+	ResponseId    string
+	Created       int64
+	Model         string
+	ResponseText  strings.Builder
+	ReasoningText strings.Builder
+	Usage         *dto.Usage
+	Done          bool
+}
+
+func collectClaudeResponseTextAndReasoning(claudeResponse *dto.ClaudeResponse) (string, string) {
+	if claudeResponse == nil {
+		return "", ""
+	}
+	var responseText strings.Builder
+	var reasoningText strings.Builder
+	for _, content := range claudeResponse.Content {
+		switch content.Type {
+		case "text":
+			responseText.WriteString(content.GetText())
+		case "thinking":
+			if content.Thinking != nil {
+				thinking := *content.Thinking
+				responseText.WriteString(thinking)
+				reasoningText.WriteString(thinking)
+			}
+		}
+	}
+	return responseText.String(), reasoningText.String()
 }
 
 func cacheCreationTokensForOpenAIUsage(usage *dto.Usage) int {
@@ -901,6 +923,7 @@ func FormatClaudeResponseInfo(claudeResponse *dto.ClaudeResponse, oaiResponse *d
 			}
 			if claudeResponse.Delta.Thinking != nil {
 				claudeInfo.ResponseText.WriteString(*claudeResponse.Delta.Thinking)
+				claudeInfo.ReasoningText.WriteString(*claudeResponse.Delta.Thinking)
 			}
 		}
 	} else if claudeResponse.Type == "message_delta" {
@@ -982,6 +1005,7 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 				syncClaudeUsageFieldsFromRelayUsage(claudeResponse.Usage, claudeInfo.Usage)
 				data = rewriteClaudeUsageData(data, claudeResponse.Usage)
 			}
+			service.FillMissingReasoningTokens(c, claudeInfo.Usage, claudeInfo.ReasoningText.String(), info.UpstreamModelName)
 			// 确保 message_delta 的 usage 包含完整的 input_tokens 和 cache 相关字段
 			// 解决 AWS Bedrock 等上游返回的 message_delta 缺少这些字段的问题
 			if !shouldSkipClaudeMessageDeltaUsagePatch(info) {
@@ -1045,6 +1069,7 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 		claudeInfo.Usage.TotalTokens = uncachedTokens + claudeInfo.Usage.CompletionTokens
 	}
 	service.NormalizeNoCacheUsageForRelay(c, info, claudeInfo.Usage)
+	service.FillMissingReasoningTokens(c, claudeInfo.Usage, claudeInfo.ReasoningText.String(), info.UpstreamModelName)
 
 	if info.RelayFormat == types.RelayFormatClaude {
 		//
@@ -1100,19 +1125,12 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	if claudeInfo.Usage == nil {
 		claudeInfo.Usage = &dto.Usage{}
 	}
+	responseText, reasoningText := collectClaudeResponseTextAndReasoning(&claudeResponse)
 	noCacheNormalized := false
 	if claudeResponse.Usage != nil {
 		mergeClaudeUsageIntoRelayUsage(claudeInfo.Usage, claudeResponse.Usage)
 
 		if claudeInfo.Usage.PromptTokens == 0 || claudeInfo.Usage.CompletionTokens == 0 {
-			var responseText string
-			for _, content := range claudeResponse.Content {
-				if content.Type == "text" {
-					responseText += content.GetText()
-				} else if content.Type == "thinking" && content.Thinking != nil {
-					responseText += *content.Thinking
-				}
-			}
 			service.EnsureCompleteUsage(c, claudeInfo.Usage, info.GetEstimatePromptTokens(), responseText, info.UpstreamModelName)
 			claudeResponse.Usage.InputTokens = claudeInfo.Usage.PromptTokens
 			claudeResponse.Usage.OutputTokens = claudeInfo.Usage.CompletionTokens
@@ -1143,6 +1161,7 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 			syncClaudeUsageFieldsFromRelayUsage(claudeResponse.Usage, claudeInfo.Usage)
 		}
 	}
+	service.FillMissingReasoningTokens(c, claudeInfo.Usage, reasoningText, info.UpstreamModelName)
 	var responseData []byte
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAI:

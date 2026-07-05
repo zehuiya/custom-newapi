@@ -1,6 +1,8 @@
 package service
 
 import (
+	"strings"
+
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
@@ -49,4 +51,19 @@ func EnsureCompleteUsage(c *gin.Context, usage *dto.Usage, promptEstimate int, r
 		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 		common.SetContextKey(c, constant.ContextKeyLocalCountTokens, true)
 	}
+}
+
+func FillMissingReasoningTokens(c *gin.Context, usage *dto.Usage, reasoningText string, model string) bool {
+	if usage == nil || usage.CompletionTokenDetails.ReasoningTokens != 0 || strings.TrimSpace(reasoningText) == "" {
+		return false
+	}
+	reasoningTokens := CountTextToken(reasoningText, model)
+	if reasoningTokens <= 0 {
+		return false
+	}
+	usage.CompletionTokenDetails.ReasoningTokens = reasoningTokens
+	if c != nil {
+		common.SetContextKey(c, constant.ContextKeyLocalCountTokens, true)
+	}
+	return true
 }

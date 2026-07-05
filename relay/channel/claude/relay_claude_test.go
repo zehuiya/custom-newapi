@@ -4,12 +4,14 @@ import (
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -180,6 +182,26 @@ func TestFormatClaudeResponseInfo_ContentBlockDelta(t *testing.T) {
 	if claudeInfo.ResponseText.String() != "hello" {
 		t.Errorf("ResponseText = %q, want %q", claudeInfo.ResponseText.String(), "hello")
 	}
+}
+
+func TestFormatClaudeResponseInfo_ContentBlockDeltaThinkingTracksReasoning(t *testing.T) {
+	thinking := "hidden claude stream reasoning"
+	claudeInfo := &ClaudeResponseInfo{
+		Usage:        &dto.Usage{},
+		ResponseText: strings.Builder{},
+	}
+	claudeResponse := &dto.ClaudeResponse{
+		Type: "content_block_delta",
+		Delta: &dto.ClaudeMediaMessage{
+			Thinking: &thinking,
+		},
+	}
+
+	ok := FormatClaudeResponseInfo(claudeResponse, nil, claudeInfo)
+
+	require.True(t, ok)
+	require.Equal(t, thinking, claudeInfo.ResponseText.String())
+	require.Equal(t, thinking, claudeInfo.ReasoningText.String())
 }
 
 func TestBuildOpenAIStyleUsageFromClaudeUsage(t *testing.T) {
@@ -429,6 +451,48 @@ func TestHandleClaudeResponseDataNoCacheNormalizesNativeUsage(t *testing.T) {
 	require.Equal(t, 20, body.Usage.OutputTokens)
 }
 
+func TestHandleClaudeResponseDataFillsReasoningTokensForOpenAIRelay(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	reasoningText := "hidden claude reasoning"
+	info := &relaycommon.RelayInfo{
+		RelayFormat: types.RelayFormatOpenAI,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "claude-test",
+		},
+	}
+	claudeInfo := &ClaudeResponseInfo{Usage: &dto.Usage{}}
+	data := []byte(`{
+		"id": "msg-test",
+		"type": "message",
+		"role": "assistant",
+		"model": "claude-test",
+		"content": [
+			{"type": "thinking", "thinking": "` + reasoningText + `"},
+			{"type": "text", "text": "ok"}
+		],
+		"stop_reason": "end_turn",
+		"usage": {
+			"input_tokens": 10,
+			"output_tokens": 5
+		}
+	}`)
+
+	err := HandleClaudeResponseData(c, info, claudeInfo, &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+	}, data)
+
+	expected := service.CountTextToken(reasoningText, "claude-test")
+	require.Nil(t, err)
+	require.Equal(t, expected, claudeInfo.Usage.CompletionTokenDetails.ReasoningTokens)
+
+	var body dto.OpenAITextResponse
+	require.NoError(t, common.Unmarshal(w.Body.Bytes(), &body))
+	require.Equal(t, expected, body.Usage.CompletionTokenDetails.ReasoningTokens)
+}
+
 func TestHandleStreamResponseDataNoCacheNormalizesMessageDeltaUsage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
@@ -449,6 +513,41 @@ func TestHandleStreamResponseDataNoCacheNormalizesMessageDeltaUsage(t *testing.T
 	require.Equal(t, 130, claudeInfo.Usage.PromptTokens)
 	require.Equal(t, 20, claudeInfo.Usage.CompletionTokens)
 	require.Equal(t, 150, claudeInfo.Usage.TotalTokens)
+	require.Equal(t, 0, claudeInfo.Usage.PromptTokensDetails.CachedTokens)
+	require.Contains(t, w.Body.String(), `"input_tokens":130`)
+	require.Contains(t, w.Body.String(), `"cache_read_input_tokens":0`)
+}
+
+func TestHandleStreamResponseDataNoCacheNormalizesMessageStartUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	info := &relaycommon.RelayInfo{
+		RelayFormat: types.RelayFormatClaude,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelName: "claude-[no_cache]",
+		},
+	}
+	claudeInfo := &ClaudeResponseInfo{Usage: &dto.Usage{}}
+	data := `{
+		"type":"message_start",
+		"message":{
+			"id":"msg-test",
+			"type":"message",
+			"role":"assistant",
+			"model":"claude-test",
+			"content":[],
+			"usage":{"input_tokens":100,"cache_read_input_tokens":30,"output_tokens":0}
+		}
+	}`
+
+	err := HandleStreamResponseData(c, info, claudeInfo, data)
+
+	require.Nil(t, err)
+	require.Equal(t, 130, claudeInfo.Usage.PromptTokens)
+	require.Equal(t, 0, claudeInfo.Usage.CompletionTokens)
+	require.Equal(t, 130, claudeInfo.Usage.TotalTokens)
 	require.Equal(t, 0, claudeInfo.Usage.PromptTokensDetails.CachedTokens)
 	require.Contains(t, w.Body.String(), `"input_tokens":130`)
 	require.Contains(t, w.Body.String(), `"cache_read_input_tokens":0`)
@@ -490,6 +589,37 @@ func TestHandleStreamFinalResponseNoCacheNormalizesOpenAIUsageChunk(t *testing.T
 	require.Contains(t, w.Body.String(), `"prompt_tokens":130`)
 	require.Contains(t, w.Body.String(), `"total_tokens":150`)
 	require.Contains(t, w.Body.String(), `"cached_tokens":0`)
+}
+
+func TestHandleStreamFinalResponseFillsReasoningTokensForOpenAIRelay(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	reasoningText := "hidden claude stream reasoning"
+	info := &relaycommon.RelayInfo{
+		RelayFormat:        types.RelayFormatOpenAI,
+		ShouldIncludeUsage: true,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "claude-test",
+		},
+	}
+	claudeInfo := &ClaudeResponseInfo{
+		ResponseId: "msg-test",
+		Model:      "claude-test",
+		Done:       true,
+		Usage: &dto.Usage{
+			PromptTokens:     10,
+			CompletionTokens: 5,
+			TotalTokens:      15,
+		},
+	}
+	claudeInfo.ReasoningText.WriteString(reasoningText)
+
+	HandleStreamFinalResponse(c, info, claudeInfo)
+
+	expected := service.CountTextToken(reasoningText, "claude-test")
+	require.Equal(t, expected, claudeInfo.Usage.CompletionTokenDetails.ReasoningTokens)
+	require.Contains(t, w.Body.String(), `"reasoning_tokens":`+strconv.Itoa(expected))
 }
 
 func TestRequestOpenAI2ClaudeMessage_IgnoresUnsupportedFileContent(t *testing.T) {
