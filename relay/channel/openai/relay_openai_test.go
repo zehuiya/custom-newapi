@@ -3,6 +3,7 @@ package openai
 import (
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -241,8 +242,11 @@ func TestOpenaiHandlerFillsMissingReasoningTokens(t *testing.T) {
 		},
 	}, resp)
 
-	expected := service.CountTextToken(reasoningText, "test-model")
+	outputEstimate := service.CountTextToken("ok", "test-model")
+	reasoningEstimate := service.CountTextToken(reasoningText, "test-model")
+	expected := int(math.Round(float64(5) * float64(reasoningEstimate) / float64(outputEstimate+reasoningEstimate)))
 	require.Nil(t, err)
+	require.Greater(t, expected, 0)
 	require.Equal(t, expected, usage.CompletionTokenDetails.ReasoningTokens)
 
 	var body dto.OpenAITextResponse
@@ -260,7 +264,6 @@ func TestOaiStreamHandlerFillsMissingReasoningTokensInUsageChunk(t *testing.T) {
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-	reasoningText := "hidden stream reasoning"
 	sse := strings.Join([]string{
 		`data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"hidden stream "},"finish_reason":null}]}`,
 		`data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{"reasoning_content":"reasoning","content":"ok"},"finish_reason":null}]}`,
@@ -282,8 +285,11 @@ func TestOaiStreamHandlerFillsMissingReasoningTokensInUsageChunk(t *testing.T) {
 		},
 	}, resp)
 
-	expected := service.CountTextToken(reasoningText, "test-model")
+	outputEstimate := service.CountTextToken("ok", "test-model")
+	reasoningEstimate := service.CountTextToken("hidden stream reasoning", "test-model")
+	expected := int(math.Round(float64(5) * float64(reasoningEstimate) / float64(outputEstimate+reasoningEstimate)))
 	require.Nil(t, err)
+	require.Greater(t, expected, 0)
 	require.Equal(t, expected, usage.CompletionTokenDetails.ReasoningTokens)
 	require.Contains(t, w.Body.String(), fmt.Sprintf(`"reasoning_tokens":%d`, expected))
 }

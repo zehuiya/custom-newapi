@@ -216,13 +216,13 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		&containStreamUsage, info, &shouldSendLastResp); err != nil {
 		logger.LogError(c, fmt.Sprintf("error handling last response: %s, lastStreamData: [%s]", err.Error(), lastStreamData))
 	}
-	reasoningText := collectReasoningContentFromOpenAIStreamItems(streamItems)
+	reasoningText, outputText := collectReasoningAndOutputContentFromOpenAIStreamItems(streamItems)
 
 	// 注入/归一化缓存信息到lastStreamData中（如果包含usage）
 	if containStreamUsage && usage != nil {
 		applyUsagePostProcessing(info, usage, common.StringToByteSlice(lastStreamData))
 		usageModifiedInLastStream := false
-		if service.FillMissingReasoningTokens(c, usage, reasoningText, model) {
+		if service.FillMissingReasoningTokens(c, usage, reasoningText, outputText, model) {
 			usageModifiedInLastStream = true
 		}
 		if info.ShouldInjectCacheInfo && usage.PromptTokensDetails.CachedTokens == 0 && usage.PromptTokens >= 4096 {
@@ -253,7 +253,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	} else {
 		service.EnsureCompleteUsage(c, usage, info.GetEstimatePromptTokens(), responseTextBuilder.String(), info.UpstreamModelName)
 	}
-	service.FillMissingReasoningTokens(c, usage, reasoningText, model)
+	service.FillMissingReasoningTokens(c, usage, reasoningText, outputText, model)
 
 	applyUsagePostProcessing(info, usage, common.StringToByteSlice(lastStreamData))
 	service.NormalizeNoCacheUsageForRelay(c, info, usage)
@@ -346,7 +346,8 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 	if normalizeReasoning {
 		normalizeReasoningContentInTextResponse(&simpleResponse)
 	}
-	if service.FillMissingReasoningTokens(c, &simpleResponse.Usage, collectReasoningContentFromOpenAIResponse(&simpleResponse), info.UpstreamModelName) {
+	reasoningText, outputText := collectReasoningAndOutputContentFromOpenAIResponse(&simpleResponse)
+	if service.FillMissingReasoningTokens(c, &simpleResponse.Usage, reasoningText, outputText, info.UpstreamModelName) {
 		usageModified = true
 	}
 

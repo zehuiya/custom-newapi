@@ -118,13 +118,18 @@ func normalizeReasoningContentInStreamResponse(response *dto.ChatCompletionsStre
 	return changed
 }
 
-func collectReasoningContentFromOpenAIResponse(response *dto.OpenAITextResponse) string {
+func collectReasoningAndOutputContentFromOpenAIResponse(response *dto.OpenAITextResponse) (string, string) {
 	if response == nil {
-		return ""
+		return "", ""
 	}
 
 	var reasoningText strings.Builder
+	var outputText strings.Builder
 	for _, choice := range response.Choices {
+		outputText.WriteString(choice.Message.StringContent())
+		if len(choice.Message.ToolCalls) > 0 {
+			outputText.Write(choice.Message.ToolCalls)
+		}
 		if choice.Message.ReasoningContent != "" {
 			reasoningText.WriteString(choice.Message.ReasoningContent)
 			continue
@@ -133,11 +138,12 @@ func collectReasoningContentFromOpenAIResponse(response *dto.OpenAITextResponse)
 			reasoningText.WriteString(choice.Message.Reasoning)
 		}
 	}
-	return reasoningText.String()
+	return reasoningText.String(), outputText.String()
 }
 
-func collectReasoningContentFromOpenAIStreamItems(streamItems []string) string {
+func collectReasoningAndOutputContentFromOpenAIStreamItems(streamItems []string) (string, string) {
 	var reasoningText strings.Builder
+	var outputText strings.Builder
 	for _, item := range streamItems {
 		var streamResponse dto.ChatCompletionsStreamResponse
 		if err := common.UnmarshalJsonStr(item, &streamResponse); err != nil {
@@ -145,7 +151,12 @@ func collectReasoningContentFromOpenAIStreamItems(streamItems []string) string {
 		}
 		for _, choice := range streamResponse.Choices {
 			reasoningText.WriteString(choice.Delta.GetReasoningContent())
+			outputText.WriteString(choice.Delta.GetContentString())
+			for _, tool := range choice.Delta.ToolCalls {
+				outputText.WriteString(tool.Function.Name)
+				outputText.WriteString(tool.Function.Arguments)
+			}
 		}
 	}
-	return reasoningText.String()
+	return reasoningText.String(), outputText.String()
 }

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"math"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -53,11 +54,24 @@ func EnsureCompleteUsage(c *gin.Context, usage *dto.Usage, promptEstimate int, r
 	}
 }
 
-func FillMissingReasoningTokens(c *gin.Context, usage *dto.Usage, reasoningText string, model string) bool {
-	if usage == nil || usage.CompletionTokenDetails.ReasoningTokens != 0 || strings.TrimSpace(reasoningText) == "" {
+func FillMissingReasoningTokens(c *gin.Context, usage *dto.Usage, reasoningText string, outputText string, model string) bool {
+	if usage == nil || usage.CompletionTokenDetails.ReasoningTokens != 0 || usage.CompletionTokens <= 0 || strings.TrimSpace(reasoningText) == "" {
 		return false
 	}
-	reasoningTokens := CountTextToken(reasoningText, model)
+	outputTokens := 0
+	if strings.TrimSpace(outputText) != "" {
+		outputTokens = CountTextToken(outputText, model)
+	}
+	reasoningEstimateTokens := CountTextToken(reasoningText, model)
+	totalEstimateTokens := outputTokens + reasoningEstimateTokens
+	if reasoningEstimateTokens <= 0 || totalEstimateTokens <= 0 {
+		return false
+	}
+
+	reasoningTokens := int(math.Round(float64(usage.CompletionTokens) * float64(reasoningEstimateTokens) / float64(totalEstimateTokens)))
+	if reasoningTokens > usage.CompletionTokens {
+		reasoningTokens = usage.CompletionTokens
+	}
 	if reasoningTokens <= 0 {
 		return false
 	}

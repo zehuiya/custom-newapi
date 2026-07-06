@@ -600,29 +600,39 @@ type ClaudeResponseInfo struct {
 	Model         string
 	ResponseText  strings.Builder
 	ReasoningText strings.Builder
+	OutputText    strings.Builder
 	Usage         *dto.Usage
 	Done          bool
 }
 
-func collectClaudeResponseTextAndReasoning(claudeResponse *dto.ClaudeResponse) (string, string) {
+func collectClaudeResponseTextAndReasoning(claudeResponse *dto.ClaudeResponse) (string, string, string) {
 	if claudeResponse == nil {
-		return "", ""
+		return "", "", ""
 	}
 	var responseText strings.Builder
 	var reasoningText strings.Builder
+	var outputText strings.Builder
 	for _, content := range claudeResponse.Content {
 		switch content.Type {
 		case "text":
-			responseText.WriteString(content.GetText())
+			text := content.GetText()
+			responseText.WriteString(text)
+			outputText.WriteString(text)
 		case "thinking":
 			if content.Thinking != nil {
 				thinking := *content.Thinking
 				responseText.WriteString(thinking)
 				reasoningText.WriteString(thinking)
 			}
+		case "tool_use":
+			outputText.WriteString(content.Name)
+			if content.Input != nil {
+				args, _ := common.Marshal(content.Input)
+				outputText.Write(args)
+			}
 		}
 	}
-	return responseText.String(), reasoningText.String()
+	return responseText.String(), reasoningText.String(), outputText.String()
 }
 
 func cacheCreationTokensForOpenAIUsage(usage *dto.Usage) int {
@@ -919,7 +929,9 @@ func FormatClaudeResponseInfo(claudeResponse *dto.ClaudeResponse, oaiResponse *d
 	} else if claudeResponse.Type == "content_block_delta" {
 		if claudeResponse.Delta != nil {
 			if claudeResponse.Delta.Text != nil {
-				claudeInfo.ResponseText.WriteString(*claudeResponse.Delta.Text)
+				text := *claudeResponse.Delta.Text
+				claudeInfo.ResponseText.WriteString(text)
+				claudeInfo.OutputText.WriteString(text)
 			}
 			if claudeResponse.Delta.Thinking != nil {
 				claudeInfo.ResponseText.WriteString(*claudeResponse.Delta.Thinking)
@@ -1005,7 +1017,7 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 				syncClaudeUsageFieldsFromRelayUsage(claudeResponse.Usage, claudeInfo.Usage)
 				data = rewriteClaudeUsageData(data, claudeResponse.Usage)
 			}
-			service.FillMissingReasoningTokens(c, claudeInfo.Usage, claudeInfo.ReasoningText.String(), info.UpstreamModelName)
+			service.FillMissingReasoningTokens(c, claudeInfo.Usage, claudeInfo.ReasoningText.String(), claudeInfo.OutputText.String(), info.UpstreamModelName)
 			// 确保 message_delta 的 usage 包含完整的 input_tokens 和 cache 相关字段
 			// 解决 AWS Bedrock 等上游返回的 message_delta 缺少这些字段的问题
 			if !shouldSkipClaudeMessageDeltaUsagePatch(info) {
@@ -1069,7 +1081,7 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 		claudeInfo.Usage.TotalTokens = uncachedTokens + claudeInfo.Usage.CompletionTokens
 	}
 	service.NormalizeNoCacheUsageForRelay(c, info, claudeInfo.Usage)
-	service.FillMissingReasoningTokens(c, claudeInfo.Usage, claudeInfo.ReasoningText.String(), info.UpstreamModelName)
+	service.FillMissingReasoningTokens(c, claudeInfo.Usage, claudeInfo.ReasoningText.String(), claudeInfo.OutputText.String(), info.UpstreamModelName)
 
 	if info.RelayFormat == types.RelayFormatClaude {
 		//
@@ -1125,7 +1137,7 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	if claudeInfo.Usage == nil {
 		claudeInfo.Usage = &dto.Usage{}
 	}
-	responseText, reasoningText := collectClaudeResponseTextAndReasoning(&claudeResponse)
+	responseText, reasoningText, outputText := collectClaudeResponseTextAndReasoning(&claudeResponse)
 	noCacheNormalized := false
 	if claudeResponse.Usage != nil {
 		mergeClaudeUsageIntoRelayUsage(claudeInfo.Usage, claudeResponse.Usage)
@@ -1161,7 +1173,7 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 			syncClaudeUsageFieldsFromRelayUsage(claudeResponse.Usage, claudeInfo.Usage)
 		}
 	}
-	service.FillMissingReasoningTokens(c, claudeInfo.Usage, reasoningText, info.UpstreamModelName)
+	service.FillMissingReasoningTokens(c, claudeInfo.Usage, reasoningText, outputText, info.UpstreamModelName)
 	var responseData []byte
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAI:

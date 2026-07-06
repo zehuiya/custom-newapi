@@ -2,6 +2,7 @@ package claude
 
 import (
 	"encoding/base64"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -182,6 +183,9 @@ func TestFormatClaudeResponseInfo_ContentBlockDelta(t *testing.T) {
 	if claudeInfo.ResponseText.String() != "hello" {
 		t.Errorf("ResponseText = %q, want %q", claudeInfo.ResponseText.String(), "hello")
 	}
+	if claudeInfo.OutputText.String() != "hello" {
+		t.Errorf("OutputText = %q, want %q", claudeInfo.OutputText.String(), "hello")
+	}
 }
 
 func TestFormatClaudeResponseInfo_ContentBlockDeltaThinkingTracksReasoning(t *testing.T) {
@@ -202,6 +206,7 @@ func TestFormatClaudeResponseInfo_ContentBlockDeltaThinkingTracksReasoning(t *te
 	require.True(t, ok)
 	require.Equal(t, thinking, claudeInfo.ResponseText.String())
 	require.Equal(t, thinking, claudeInfo.ReasoningText.String())
+	require.Empty(t, claudeInfo.OutputText.String())
 }
 
 func TestBuildOpenAIStyleUsageFromClaudeUsage(t *testing.T) {
@@ -484,8 +489,11 @@ func TestHandleClaudeResponseDataFillsReasoningTokensForOpenAIRelay(t *testing.T
 		Header:     make(http.Header),
 	}, data)
 
-	expected := service.CountTextToken(reasoningText, "claude-test")
+	outputEstimate := service.CountTextToken("ok", "claude-test")
+	reasoningEstimate := service.CountTextToken(reasoningText, "claude-test")
+	expected := int(math.Round(float64(5) * float64(reasoningEstimate) / float64(outputEstimate+reasoningEstimate)))
 	require.Nil(t, err)
+	require.Greater(t, expected, 0)
 	require.Equal(t, expected, claudeInfo.Usage.CompletionTokenDetails.ReasoningTokens)
 
 	var body dto.OpenAITextResponse
@@ -614,10 +622,14 @@ func TestHandleStreamFinalResponseFillsReasoningTokensForOpenAIRelay(t *testing.
 		},
 	}
 	claudeInfo.ReasoningText.WriteString(reasoningText)
+	claudeInfo.OutputText.WriteString("ok")
 
 	HandleStreamFinalResponse(c, info, claudeInfo)
 
-	expected := service.CountTextToken(reasoningText, "claude-test")
+	outputEstimate := service.CountTextToken("ok", "claude-test")
+	reasoningEstimate := service.CountTextToken(reasoningText, "claude-test")
+	expected := int(math.Round(float64(5) * float64(reasoningEstimate) / float64(outputEstimate+reasoningEstimate)))
+	require.Greater(t, expected, 0)
 	require.Equal(t, expected, claudeInfo.Usage.CompletionTokenDetails.ReasoningTokens)
 	require.Contains(t, w.Body.String(), `"reasoning_tokens":`+strconv.Itoa(expected))
 }
