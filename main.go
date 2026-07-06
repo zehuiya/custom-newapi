@@ -22,6 +22,7 @@ import (
 	"github.com/QuantumNous/new-api/relay"
 	"github.com/QuantumNous/new-api/router"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/relaypayloadlog"
 	_ "github.com/QuantumNous/new-api/setting/performance_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
@@ -253,6 +254,7 @@ func InitResources() error {
 	common.InitEnv()
 
 	logger.SetupLogger()
+	relaypayloadlog.InitFromEnv()
 
 	// Initialize model settings
 	ratio_setting.InitRatioSettings()

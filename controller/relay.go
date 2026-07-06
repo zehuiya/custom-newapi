@@ -20,6 +20,7 @@ import (
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/relaypayloadlog"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -120,6 +121,15 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	if err != nil {
 		newAPIError = types.NewError(err, types.ErrorCodeGenRelayInfoFailed)
 		return
+	}
+
+	payloadLogFinish := startRelayPayloadLogCapture(c, relayFormat, relayInfo)
+	if payloadLogFinish != nil {
+		defer func() {
+			if newAPIError == nil {
+				payloadLogFinish(relayInfo.IsStream)
+			}
+		}()
 	}
 
 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
@@ -309,6 +319,48 @@ func fastTokenCountMetaForPricing(request dto.Request) *types.TokenCountMeta {
 		// Best-effort: leave CombineText empty to avoid large allocations.
 	}
 	return meta
+}
+
+func startRelayPayloadLogCapture(c *gin.Context, relayFormat types.RelayFormat, info *relaycommon.RelayInfo) func(bool) bool {
+	if !relaypayloadlog.Enabled() || !shouldCaptureRelayPayload(relayFormat, info) {
+		return nil
+	}
+	storage, err := common.GetBodyStorage(c)
+	if err != nil {
+		logger.LogWarn(c, "payload log request capture skipped: "+err.Error())
+		return nil
+	}
+	requestBody, err := storage.Bytes()
+	if err != nil {
+		logger.LogWarn(c, "payload log request read skipped: "+err.Error())
+		return nil
+	}
+	return relaypayloadlog.StartCapture(c, info, relayPayloadLogProtocol(relayFormat), requestBody)
+}
+
+func shouldCaptureRelayPayload(relayFormat types.RelayFormat, info *relaycommon.RelayInfo) bool {
+	if info == nil {
+		return false
+	}
+	switch relayFormat {
+	case types.RelayFormatClaude:
+		return true
+	case types.RelayFormatOpenAI:
+		return info.RelayMode == relayconstant.RelayModeChatCompletions || info.RelayMode == relayconstant.RelayModeCompletions
+	default:
+		return false
+	}
+}
+
+func relayPayloadLogProtocol(relayFormat types.RelayFormat) string {
+	switch relayFormat {
+	case types.RelayFormatClaude:
+		return relaypayloadlog.ProtocolAnthropic
+	case types.RelayFormatOpenAI:
+		return relaypayloadlog.ProtocolOpenAI
+	default:
+		return ""
+	}
 }
 
 func selectedChannelTokenLimitFlags(c *gin.Context) (bool, bool, bool) {
