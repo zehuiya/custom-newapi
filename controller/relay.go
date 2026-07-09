@@ -72,8 +72,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	//originalModel := common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
 
 	var (
-		newAPIError *types.NewAPIError
-		ws          *websocket.Conn
+		newAPIError      *types.NewAPIError
+		relayInfo        *relaycommon.RelayInfo
+		payloadLogFinish func(stream bool, errorInfo *relaypayloadlog.ErrorInfo) bool
+		ws               *websocket.Conn
 	)
 
 	if relayFormat == types.RelayFormatOpenAIRealtime {
@@ -85,6 +87,17 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 		defer ws.Close()
 	}
+
+	defer func() {
+		if payloadLogFinish == nil {
+			return
+		}
+		stream := false
+		if relayInfo != nil {
+			stream = relayInfo.IsStream
+		}
+		payloadLogFinish(stream, relayPayloadLogErrorInfo(newAPIError))
+	}()
 
 	defer func() {
 		if newAPIError != nil {
@@ -117,33 +130,27 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		return
 	}
 
-	relayInfo, err := relaycommon.GenRelayInfo(c, relayFormat, request, ws)
+	relayInfo, err = relaycommon.GenRelayInfo(c, relayFormat, request, ws)
 	if err != nil {
 		newAPIError = types.NewError(err, types.ErrorCodeGenRelayInfoFailed)
 		return
 	}
 
-	payloadLogFinish := startRelayPayloadLogCapture(c, relayFormat, relayInfo)
-	if payloadLogFinish != nil {
-		defer func() {
-			if newAPIError == nil {
-				payloadLogFinish(relayInfo.IsStream)
-			}
-		}()
-	}
+	payloadLogFinish = startRelayPayloadLogCapture(c, relayFormat, relayInfo)
 
 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
 	needCountToken := constant.CountToken
 	needTokenLimitMeta := false
 	needInputTokenForLimit := false
 	if !constant.CountToken {
-		selectedHasContextLimit, selectedHasOutputLimit, selectedHasMinInputLimit := selectedChannelTokenLimitFlags(c)
-		selectionHasContextLimit, selectionHasOutputLimit, selectionHasMinInputLimit := service.TokenLimitedChannelFlagsForSelection(c, relayInfo.TokenGroup, relayInfo.OriginModelName)
+		selectedHasContextLimit, selectedHasOutputLimit, selectedHasMinInputLimit, selectedHasMaxInputLimit := selectedChannelTokenLimitFlags(c)
+		selectionHasContextLimit, selectionHasOutputLimit, selectionHasMinInputLimit, selectionHasMaxInputLimit := service.TokenLimitedChannelFlagsForSelection(c, relayInfo.TokenGroup, relayInfo.OriginModelName)
 		hasContextLimit := selectedHasContextLimit || selectionHasContextLimit
 		hasOutputLimit := selectedHasOutputLimit || selectionHasOutputLimit
 		hasMinInputLimit := selectedHasMinInputLimit || selectionHasMinInputLimit
-		needTokenLimitMeta = hasContextLimit || hasOutputLimit || hasMinInputLimit
-		needInputTokenForLimit = hasContextLimit || hasMinInputLimit
+		hasMaxInputLimit := selectedHasMaxInputLimit || selectionHasMaxInputLimit
+		needTokenLimitMeta = hasContextLimit || hasOutputLimit || hasMinInputLimit || hasMaxInputLimit
+		needInputTokenForLimit = hasContextLimit || hasMinInputLimit || hasMaxInputLimit
 	}
 	// Avoid building huge CombineText (strings.Join) when token counting and sensitive check are both disabled.
 	var meta *types.TokenCountMeta
@@ -321,7 +328,7 @@ func fastTokenCountMetaForPricing(request dto.Request) *types.TokenCountMeta {
 	return meta
 }
 
-func startRelayPayloadLogCapture(c *gin.Context, relayFormat types.RelayFormat, info *relaycommon.RelayInfo) func(bool) bool {
+func startRelayPayloadLogCapture(c *gin.Context, relayFormat types.RelayFormat, info *relaycommon.RelayInfo) func(bool, *relaypayloadlog.ErrorInfo) bool {
 	if !relaypayloadlog.Enabled() || !shouldCaptureRelayPayload(relayFormat, info) {
 		return nil
 	}
@@ -363,16 +370,28 @@ func relayPayloadLogProtocol(relayFormat types.RelayFormat) string {
 	}
 }
 
-func selectedChannelTokenLimitFlags(c *gin.Context) (bool, bool, bool) {
+func relayPayloadLogErrorInfo(err *types.NewAPIError) *relaypayloadlog.ErrorInfo {
+	if err == nil {
+		return nil
+	}
+	return &relaypayloadlog.ErrorInfo{
+		StatusCode: err.StatusCode,
+		Type:       string(err.GetErrorType()),
+		Code:       string(err.GetErrorCode()),
+		Message:    err.MaskSensitiveError(),
+	}
+}
+
+func selectedChannelTokenLimitFlags(c *gin.Context) (bool, bool, bool, bool) {
 	channelID := common.GetContextKeyInt(c, constant.ContextKeyChannelId)
 	if channelID <= 0 {
-		return false, false, false
+		return false, false, false, false
 	}
 	channel, err := model.CacheGetChannel(channelID)
 	if err != nil || channel == nil {
-		return false, false, false
+		return false, false, false, false
 	}
-	return channel.GetMaxContextTokens() > 0, channel.GetMaxOutputTokens() > 0, channel.GetMinInputTokens() > 0
+	return channel.GetMaxContextTokens() > 0, channel.GetMaxOutputTokens() > 0, channel.GetMinInputTokens() > 0, channel.GetMaxInputTokens() > 0
 }
 
 func ensureSelectedChannelSatisfiesTokenLimit(c *gin.Context, info *relaycommon.RelayInfo, inputTokens int, maxTokens int) *types.NewAPIError {
@@ -396,8 +415,8 @@ func ensureSelectedChannelSatisfiesTokenLimit(c *gin.Context, info *relaycommon.
 
 	if _, specificChannel := common.GetContextKey(c, constant.ContextKeyTokenSpecificChannelId); specificChannel {
 		return types.NewErrorWithStatusCode(
-			fmt.Errorf("channel #%d does not satisfy token limits: input_tokens=%d, max_tokens=%d, max_context_tokens=%d, max_output_tokens=%d, min_input_tokens=%d",
-				channel.Id, inputTokens, maxTokens, channel.GetMaxContextTokens(), channel.GetMaxOutputTokens(), channel.GetMinInputTokens()),
+			fmt.Errorf("channel #%d does not satisfy token limits: input_tokens=%d, max_tokens=%d, max_context_tokens=%d, max_output_tokens=%d, min_input_tokens=%d, max_input_tokens=%d",
+				channel.Id, inputTokens, maxTokens, channel.GetMaxContextTokens(), channel.GetMaxOutputTokens(), channel.GetMinInputTokens(), channel.GetMaxInputTokens()),
 			types.ErrorCodeGetChannelFailed,
 			http.StatusServiceUnavailable,
 			types.ErrOptionWithSkipRetry(),

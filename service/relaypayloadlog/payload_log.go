@@ -52,6 +52,7 @@ type rawEntry struct {
 	ResponseRaw       []byte
 	ResponseChunks    []string
 	ResponseTruncated bool
+	Error             *ErrorInfo
 }
 
 type entryMeta struct {
@@ -66,6 +67,13 @@ type entryMeta struct {
 	ChannelID     int
 	ChannelName   string
 	RetryIndex    int
+}
+
+type ErrorInfo struct {
+	StatusCode int    `json:"status_code,omitempty"`
+	Type       string `json:"type,omitempty"`
+	Code       string `json:"code,omitempty"`
+	Message    string `json:"message,omitempty"`
 }
 
 type manager struct {
@@ -186,7 +194,7 @@ func AttachRequest(c *gin.Context, info *relaycommon.RelayInfo, protocol string,
 	return true
 }
 
-func StartCapture(c *gin.Context, info *relaycommon.RelayInfo, protocol string, requestBody []byte) func(stream bool) bool {
+func StartCapture(c *gin.Context, info *relaycommon.RelayInfo, protocol string, requestBody []byte) func(stream bool, errorInfo *ErrorInfo) bool {
 	m := current()
 	if m == nil || c == nil || len(requestBody) == 0 {
 		return nil
@@ -200,13 +208,13 @@ func StartCapture(c *gin.Context, info *relaycommon.RelayInfo, protocol string, 
 		maxBytes:       m.cfg.MaxEntryBytes,
 	}
 	c.Writer = writer
-	return func(stream bool) bool {
+	return func(stream bool, errorInfo *ErrorInfo) bool {
 		responseBody, truncated := writer.Bytes()
-		return SubmitResponse(c, info, protocol, stream, responseBody, truncated)
+		return SubmitResponse(c, info, protocol, stream, responseBody, errorInfo, truncated)
 	}
 }
 
-func SubmitResponse(c *gin.Context, info *relaycommon.RelayInfo, protocol string, stream bool, responseBody []byte, responseTruncated ...bool) bool {
+func SubmitResponse(c *gin.Context, info *relaycommon.RelayInfo, protocol string, stream bool, responseBody []byte, errorInfo *ErrorInfo, responseTruncated ...bool) bool {
 	m := current()
 	if m == nil || c == nil {
 		return false
@@ -236,6 +244,7 @@ func SubmitResponse(c *gin.Context, info *relaycommon.RelayInfo, protocol string
 		RequestRaw:        req.Raw,
 		ResponseRaw:       responseBody,
 		ResponseTruncated: len(responseTruncated) > 0 && responseTruncated[0],
+		Error:             errorInfo,
 	})
 }
 
@@ -471,6 +480,9 @@ func (w *writerWorker) writeEntry(entry rawEntry) {
 		"channel_name":   entry.Meta.ChannelName,
 		"retry_index":    entry.Meta.RetryIndex,
 		"request":        sanitizePayload(entry.RequestRaw),
+	}
+	if entry.Error != nil {
+		record["error"] = entry.Error
 	}
 	if entry.Meta.Stream && len(entry.ResponseChunks) > 0 {
 		record["response"] = sanitizeStreamChunks(entry.ResponseChunks)

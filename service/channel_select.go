@@ -47,26 +47,28 @@ func (p *RetryParam) ResetRetryNextTry() {
 }
 
 func HasContextLimitedChannelForSelection(c *gin.Context, tokenGroup string, modelName string) bool {
-	hasContextLimit, _, _ := TokenLimitedChannelFlagsForSelection(c, tokenGroup, modelName)
+	hasContextLimit, _, _, _ := TokenLimitedChannelFlagsForSelection(c, tokenGroup, modelName)
 	return hasContextLimit
 }
 
-func TokenLimitedChannelFlagsForSelection(c *gin.Context, tokenGroup string, modelName string) (bool, bool, bool) {
+func TokenLimitedChannelFlagsForSelection(c *gin.Context, tokenGroup string, modelName string) (bool, bool, bool, bool) {
 	if tokenGroup == "auto" {
 		userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 		hasContextLimit := false
 		hasOutputLimit := false
 		hasMinInputLimit := false
+		hasMaxInputLimit := false
 		for _, group := range GetUserAutoGroup(userGroup) {
-			groupHasContextLimit, groupHasOutputLimit, groupHasMinInputLimit := model.TokenLimitedChannelFlagsForGroupModel(group, modelName)
+			groupHasContextLimit, groupHasOutputLimit, groupHasMinInputLimit, groupHasMaxInputLimit := model.TokenLimitedChannelFlagsForGroupModel(group, modelName)
 			hasContextLimit = hasContextLimit || groupHasContextLimit
 			hasOutputLimit = hasOutputLimit || groupHasOutputLimit
 			hasMinInputLimit = hasMinInputLimit || groupHasMinInputLimit
-			if hasContextLimit && hasOutputLimit && hasMinInputLimit {
-				return true, true, true
+			hasMaxInputLimit = hasMaxInputLimit || groupHasMaxInputLimit
+			if hasContextLimit && hasOutputLimit && hasMinInputLimit && hasMaxInputLimit {
+				return true, true, true, true
 			}
 		}
-		return hasContextLimit, hasOutputLimit, hasMinInputLimit
+		return hasContextLimit, hasOutputLimit, hasMinInputLimit, hasMaxInputLimit
 	}
 	return model.TokenLimitedChannelFlagsForGroupModel(tokenGroup, modelName)
 }
