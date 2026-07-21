@@ -42,17 +42,20 @@ type Config struct {
 
 type requestCapture struct {
 	Protocol string
-	Raw      []byte
+	Payload  any
+	RawBytes int
 	Meta     entryMeta
 }
 
-type rawEntry struct {
-	Meta              entryMeta
-	RequestRaw        []byte
-	ResponseRaw       []byte
-	ResponseChunks    []string
-	ResponseTruncated bool
-	Error             *ErrorInfo
+type capturedEntry struct {
+	Meta               entryMeta
+	Request            any
+	RequestRawBytes    int
+	Response           any
+	ResponseRawBytes   int
+	ResponseChunkCount int
+	ResponseTruncated  bool
+	Error              *ErrorInfo
 }
 
 type entryMeta struct {
@@ -78,7 +81,7 @@ type ErrorInfo struct {
 
 type manager struct {
 	cfg         Config
-	queue       chan rawEntry
+	queue       chan []byte
 	stop        chan struct{}
 	done        chan struct{}
 	stopped     atomic.Bool
@@ -144,7 +147,7 @@ func Init(cfg Config) {
 	}
 	m := &manager{
 		cfg:   cfg,
-		queue: make(chan rawEntry, cfg.QueueSize),
+		queue: make(chan []byte, cfg.QueueSize),
 		stop:  make(chan struct{}),
 		done:  make(chan struct{}),
 	}
@@ -188,28 +191,36 @@ func AttachRequest(c *gin.Context, info *relaycommon.RelayInfo, protocol string,
 	}
 	c.Set(requestContextKey, requestCapture{
 		Protocol: protocol,
-		Raw:      requestBody,
+		Payload:  sanitizePayload(requestBody),
+		RawBytes: len(requestBody),
 		Meta:     buildMeta(c, info, protocol, false),
 	})
 	return true
 }
 
-func StartCapture(c *gin.Context, info *relaycommon.RelayInfo, protocol string, requestBody []byte) func(stream bool, errorInfo *ErrorInfo) bool {
+func StartCapture(c *gin.Context, info *relaycommon.RelayInfo, protocol string, loadRequestBody func() ([]byte, error)) func(stream bool, errorInfo *ErrorInfo) bool {
 	m := current()
-	if m == nil || c == nil || len(requestBody) == 0 {
+	if m == nil || c == nil || loadRequestBody == nil {
 		return nil
 	}
 	if !m.shouldSample() {
 		return nil
 	}
-	AttachRequest(c, info, protocol, requestBody)
+	requestBody, err := loadRequestBody()
+	if err != nil {
+		logger.LogWarn(c, "payload log request read skipped: "+err.Error())
+		return nil
+	}
+	if len(requestBody) == 0 || !AttachRequest(c, info, protocol, requestBody) {
+		return nil
+	}
 	writer := &responseCaptureWriter{
 		ResponseWriter: c.Writer,
 		maxBytes:       m.cfg.MaxEntryBytes,
 	}
 	c.Writer = writer
 	return func(stream bool, errorInfo *ErrorInfo) bool {
-		responseBody, truncated := writer.Bytes()
+		responseBody, truncated := writer.TakeBytes()
 		return SubmitResponse(c, info, protocol, stream, responseBody, errorInfo, truncated)
 	}
 }
@@ -239,13 +250,24 @@ func SubmitResponse(c *gin.Context, info *relaycommon.RelayInfo, protocol string
 		meta.Stream = stream
 	}
 	meta.Protocol = protocol
-	return m.submit(rawEntry{
+	response := sanitizePayload(responseBody)
+	if stream {
+		response = sanitizeStreamBody(responseBody)
+	}
+	line, err := m.prepareLine(capturedEntry{
 		Meta:              meta,
-		RequestRaw:        req.Raw,
-		ResponseRaw:       responseBody,
+		Request:           req.Payload,
+		RequestRawBytes:   req.RawBytes,
+		Response:          response,
+		ResponseRawBytes:  len(responseBody),
 		ResponseTruncated: len(responseTruncated) > 0 && responseTruncated[0],
 		Error:             errorInfo,
 	})
+	if err != nil {
+		logger.LogError(c, "payload log prepare failed: "+err.Error())
+		return false
+	}
+	return m.submit(line)
 }
 
 func SubmitStreamResponse(c *gin.Context, info *relaycommon.RelayInfo, protocol string, chunks []string) bool {
@@ -273,11 +295,23 @@ func SubmitStreamResponse(c *gin.Context, info *relaycommon.RelayInfo, protocol 
 		meta.Stream = true
 	}
 	meta.Protocol = protocol
-	return m.submit(rawEntry{
-		Meta:           meta,
-		RequestRaw:     req.Raw,
-		ResponseChunks: append([]string(nil), chunks...),
+	rawBytes := 0
+	for _, chunk := range chunks {
+		rawBytes += len(chunk)
+	}
+	line, err := m.prepareLine(capturedEntry{
+		Meta:               meta,
+		Request:            req.Payload,
+		RequestRawBytes:    req.RawBytes,
+		Response:           sanitizeStreamChunks(chunks),
+		ResponseRawBytes:   rawBytes,
+		ResponseChunkCount: len(chunks),
 	})
+	if err != nil {
+		logger.LogError(c, "payload log prepare failed: "+err.Error())
+		return false
+	}
+	return m.submit(line)
 }
 
 func normalizeConfig(cfg *Config) {
@@ -345,12 +379,12 @@ func buildMeta(c *gin.Context, info *relaycommon.RelayInfo, protocol string, str
 	return meta
 }
 
-func (m *manager) submit(entry rawEntry) bool {
-	if m == nil || m.stopped.Load() {
+func (m *manager) submit(line []byte) bool {
+	if m == nil || m.stopped.Load() || len(line) == 0 {
 		return false
 	}
 	select {
-	case m.queue <- entry:
+	case m.queue <- line:
 		return true
 	default:
 		m.logDrop()
@@ -410,11 +444,13 @@ func (w *responseCaptureWriter) capture(data []byte) {
 	w.buf = append(w.buf, data...)
 }
 
-func (w *responseCaptureWriter) Bytes() ([]byte, bool) {
+func (w *responseCaptureWriter) TakeBytes() ([]byte, bool) {
 	if w == nil || len(w.buf) == 0 {
-		return nil, false
+		return nil, w != nil && w.truncated
 	}
-	return append([]byte(nil), w.buf...), w.truncated
+	data := w.buf
+	w.buf = nil
+	return data, w.truncated
 }
 
 func (m *manager) run() {
@@ -446,8 +482,8 @@ func (w *writerWorker) run() {
 
 	for {
 		select {
-		case entry := <-w.manager.queue:
-			w.writeEntry(entry)
+		case line := <-w.manager.queue:
+			w.writeEntry(line)
 		case <-w.manager.stop:
 			w.drain()
 			return
@@ -458,15 +494,15 @@ func (w *writerWorker) run() {
 func (w *writerWorker) drain() {
 	for {
 		select {
-		case entry := <-w.manager.queue:
-			w.writeEntry(entry)
+		case line := <-w.manager.queue:
+			w.writeEntry(line)
 		default:
 			return
 		}
 	}
 }
 
-func (w *writerWorker) writeEntry(entry rawEntry) {
+func (m *manager) prepareLine(entry capturedEntry) ([]byte, error) {
 	record := map[string]any{
 		"ts":             entry.Meta.CreatedAt.Format(time.RFC3339Nano),
 		"request_id":     entry.Meta.RequestID,
@@ -479,46 +515,77 @@ func (w *writerWorker) writeEntry(entry rawEntry) {
 		"channel_id":     entry.Meta.ChannelID,
 		"channel_name":   entry.Meta.ChannelName,
 		"retry_index":    entry.Meta.RetryIndex,
-		"request":        sanitizePayload(entry.RequestRaw),
+		"request":        entry.Request,
 	}
 	if entry.Error != nil {
-		record["error"] = entry.Error
+		record["error"] = sanitizeErrorInfo(entry.Error)
 	}
-	if entry.Meta.Stream && len(entry.ResponseChunks) > 0 {
-		record["response"] = sanitizeStreamChunks(entry.ResponseChunks)
-	} else if entry.Meta.Stream {
-		record["response"] = sanitizeStreamBody(entry.ResponseRaw)
-	} else {
-		record["response"] = sanitizePayload(entry.ResponseRaw)
-	}
+	record["response"] = entry.Response
 	if entry.ResponseTruncated {
 		record["response_truncated"] = true
 	}
 
 	line, err := common.Marshal(record)
 	if err != nil {
-		logger.LogError(context.Background(), "payload log marshal failed: "+err.Error())
-		return
+		return nil, fmt.Errorf("marshal entry: %w", err)
 	}
-	if int64(len(line)) > w.manager.cfg.MaxEntryBytes {
+	if int64(len(line)) > m.cfg.MaxEntryBytes {
 		record["truncated"] = true
-		record["request"] = summarizePayload(entry.RequestRaw, "request")
+		record["request"] = summarizePayloadBytes(entry.RequestRawBytes, "request")
 		if entry.Meta.Stream {
 			record["response"] = map[string]any{
 				"type":          "sse",
-				"chunks":        summarizeChunks(entry.ResponseChunks),
+				"omitted":       "response",
+				"raw_bytes":     entry.ResponseRawBytes,
+				"raw_chunk_num": entry.ResponseChunkCount,
 				"truncated":     true,
-				"raw_chunk_num": len(entry.ResponseChunks),
+				"parse_hint":    "entry_exceeded_max_size",
 			}
 		} else {
-			record["response"] = summarizePayload(entry.ResponseRaw, "response")
+			record["response"] = summarizePayloadBytes(entry.ResponseRawBytes, "response")
 		}
 		line, err = common.Marshal(record)
 		if err != nil {
-			logger.LogError(context.Background(), "payload log marshal truncated entry failed: "+err.Error())
-			return
+			return nil, fmt.Errorf("marshal truncated entry: %w", err)
 		}
 	}
+	if int64(len(line)) > m.cfg.MaxEntryBytes {
+		line, err = common.Marshal(map[string]any{
+			"ts":         entry.Meta.CreatedAt.Format(time.RFC3339Nano),
+			"request_id": truncateMetadata(entry.Meta.RequestID),
+			"protocol":   entry.Meta.Protocol,
+			"stream":     entry.Meta.Stream,
+			"truncated":  true,
+			"omitted":    "entry_exceeded_max_size",
+		})
+		if err != nil {
+			return nil, fmt.Errorf("marshal minimal entry: %w", err)
+		}
+	}
+	if int64(len(line)) > m.cfg.MaxEntryBytes {
+		return nil, fmt.Errorf("entry exceeds max size after truncation: bytes=%d max=%d", len(line), m.cfg.MaxEntryBytes)
+	}
+	return line, nil
+}
+
+func sanitizeErrorInfo(errorInfo *ErrorInfo) *ErrorInfo {
+	if errorInfo == nil {
+		return nil
+	}
+	return &ErrorInfo{
+		StatusCode: errorInfo.StatusCode,
+		Type:       sanitizeErrorText(errorInfo.Type, "type"),
+		Code:       sanitizeErrorText(errorInfo.Code, "code"),
+		Message:    sanitizeErrorText(errorInfo.Message, "message"),
+	}
+}
+
+func sanitizeErrorText(value string, key string) string {
+	sanitized, _ := sanitizeString(value, key).(string)
+	return sanitized
+}
+
+func (w *writerWorker) writeEntry(line []byte) {
 	if err := w.writeLine(line); err != nil {
 		logger.LogError(context.Background(), "payload log write failed: "+err.Error())
 	}

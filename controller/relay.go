@@ -332,17 +332,13 @@ func startRelayPayloadLogCapture(c *gin.Context, relayFormat types.RelayFormat, 
 	if !relaypayloadlog.Enabled() || !shouldCaptureRelayPayload(relayFormat, info) {
 		return nil
 	}
-	storage, err := common.GetBodyStorage(c)
-	if err != nil {
-		logger.LogWarn(c, "payload log request capture skipped: "+err.Error())
-		return nil
-	}
-	requestBody, err := storage.Bytes()
-	if err != nil {
-		logger.LogWarn(c, "payload log request read skipped: "+err.Error())
-		return nil
-	}
-	return relaypayloadlog.StartCapture(c, info, relayPayloadLogProtocol(relayFormat), requestBody)
+	return relaypayloadlog.StartCapture(c, info, relayPayloadLogProtocol(relayFormat), func() ([]byte, error) {
+		storage, err := common.GetBodyStorage(c)
+		if err != nil {
+			return nil, err
+		}
+		return storage.Bytes()
+	})
 }
 
 func shouldCaptureRelayPayload(relayFormat types.RelayFormat, info *relaycommon.RelayInfo) bool {

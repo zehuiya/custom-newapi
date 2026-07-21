@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/stretchr/testify/require"
 )
 
@@ -33,6 +34,18 @@ func TestSanitizePayloadOmitsMediaAndKeepsText(t *testing.T) {
 	require.Equal(t, "media_content", content[1].(map[string]any)["omitted"])
 }
 
+func TestSanitizePayloadRedactsEmbeddedDataURI(t *testing.T) {
+	raw := []byte(`{"error":{"message":"decode failed for identifier[base64:data:image/png;base64,` + strings.Repeat("a", 600) + `] after upload"}}`)
+
+	sanitized := sanitizePayload(raw).(map[string]any)
+	message := sanitized["error"].(map[string]any)["message"].(string)
+	require.Contains(t, message, "decode failed for identifier[base64:")
+	require.Contains(t, message, "omitted_data_uri")
+	require.Contains(t, message, "after upload")
+	require.NotContains(t, message, "data:image/png")
+	require.NotContains(t, message, strings.Repeat("a", 512))
+}
+
 func TestSanitizeStreamChunksKeepsReasoningAndToolCalls(t *testing.T) {
 	chunks := []string{
 		`{"choices":[{"delta":{"reasoning_content":"think "}}]}`,
@@ -52,6 +65,26 @@ func TestSanitizeStreamChunksKeepsReasoningAndToolCalls(t *testing.T) {
 	require.Contains(t, sanitized, "finish_reason: tool_calls")
 	require.Contains(t, sanitized, "chunk_count: 5")
 	require.Contains(t, sanitized, "done: true")
+}
+
+func TestSanitizeStreamChunksRedactsToolCallDataURI(t *testing.T) {
+	arguments := `{"image":"data:image/png;base64,` + strings.Repeat("a", 600) + `"}`
+	chunk, err := common.Marshal(map[string]any{
+		"choices": []any{map[string]any{
+			"delta": map[string]any{
+				"tool_calls": []any{map[string]any{
+					"function": map[string]any{"name": "inspect", "arguments": arguments},
+				}},
+			},
+		}},
+	})
+	require.NoError(t, err)
+
+	sanitized := sanitizeStreamChunks([]string{string(chunk)}).(string)
+	require.Contains(t, sanitized, "tool_call:")
+	require.Contains(t, sanitized, "omitted_data_uri")
+	require.NotContains(t, sanitized, "data:image/png")
+	require.NotContains(t, sanitized, strings.Repeat("a", 512))
 }
 
 func TestSanitizeStreamBodyParsesSSEAndOmitsMedia(t *testing.T) {

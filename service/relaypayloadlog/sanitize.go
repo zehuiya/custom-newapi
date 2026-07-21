@@ -285,6 +285,9 @@ func sanitizeStreamText(value string) string {
 	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(value)), "data:") {
 		return summarizeString(value, "omitted_data_uri")
 	}
+	if redacted, changed := redactEmbeddedDataURIs(value); changed {
+		value = redacted
+	}
 	if looksLikeBase64(value) {
 		return summarizeString(value, "omitted_base64")
 	}
@@ -333,6 +336,9 @@ func sanitizeString(value string, key string) any {
 	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(value)), "data:") {
 		return summarizeString(value, "omitted_data_uri")
 	}
+	if redacted, changed := redactEmbeddedDataURIs(value); changed {
+		value = redacted
+	}
 	if looksLikeBase64(value) {
 		return summarizeString(value, "omitted_base64")
 	}
@@ -340,6 +346,27 @@ func sanitizeString(value string, key string) any {
 		return value[:maxLoggedStringLen] + fmt.Sprintf("...[truncated length=%d]", len(value))
 	}
 	return value
+}
+
+func redactEmbeddedDataURIs(value string) (string, bool) {
+	const prefix = "data:"
+	changed := false
+	for {
+		start := strings.Index(strings.ToLower(value), prefix)
+		if start < 0 {
+			return value, changed
+		}
+		end := len(value)
+		for i := start + len(prefix); i < len(value); i++ {
+			switch value[i] {
+			case ' ', '\t', '\r', '\n', '"', '\'', ']', ')', '}':
+				end = i
+				i = len(value)
+			}
+		}
+		value = value[:start] + summarizeString(value[start:end], "omitted_data_uri") + value[end:]
+		changed = true
+	}
 }
 
 func summarizeMediaMap(m map[string]any, typ string) map[string]any {
@@ -402,25 +429,25 @@ func summarizeString(value string, reason string) string {
 	return fmt.Sprintf("[%s length=%d]", reason, len(value))
 }
 
-func summarizePayload(data []byte, label string) any {
+func summarizePayloadBytes(rawBytes int, label string) any {
 	return map[string]any{
 		"omitted":    label,
-		"raw_bytes":  len(data),
+		"raw_bytes":  rawBytes,
 		"truncated":  true,
 		"parse_hint": "entry_exceeded_max_size",
 	}
 }
 
-func summarizeChunks(chunks []string) []any {
-	out := make([]any, 0, len(chunks))
-	for i, chunk := range chunks {
-		out = append(out, map[string]any{
-			"index":     i,
-			"raw_bytes": len(chunk),
-			"omitted":   "chunk_entry_exceeded_max_size",
-		})
+func truncateMetadata(value string) string {
+	const maxMetadataBytes = 256
+	if len(value) <= maxMetadataBytes {
+		return value
 	}
-	return out
+	end := maxMetadataBytes
+	for end > 0 && value[end]&0xc0 == 0x80 {
+		end--
+	}
+	return value[:end] + "...[truncated]"
 }
 
 func stringMapValue(m map[string]any, key string) (string, bool) {
