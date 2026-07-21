@@ -30,6 +30,7 @@ const (
 )
 
 type Adaptor struct {
+	channelType int
 }
 
 func (a *Adaptor) ConvertGeminiRequest(*gin.Context, *relaycommon.RelayInfo, *dto.GeminiChatRequest) (any, error) {
@@ -234,14 +235,43 @@ func detectImageMimeType(filename string) string {
 }
 
 func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
+	if info != nil {
+		a.channelType = info.ChannelType
+	}
+}
+
+func (a *Adaptor) isAgentPlan(info *relaycommon.RelayInfo) bool {
+	return a.channelType == channelconstant.ChannelTypeVolcEngineAgentPlan ||
+		(info != nil && info.ChannelType == channelconstant.ChannelTypeVolcEngineAgentPlan)
+}
+
+func volcengineAPIBase(baseURL, pathPrefix string) string {
+	baseURL = strings.TrimRight(baseURL, "/")
+	if strings.HasSuffix(baseURL, pathPrefix) {
+		return baseURL
+	}
+	return baseURL + pathPrefix
+}
+
+func (a *Adaptor) apiBaseURL(info *relaycommon.RelayInfo, baseURL string) string {
+	if a.isAgentPlan(info) {
+		return volcengineAPIBase(baseURL, "/api/plan/v3")
+	}
+	return volcengineAPIBase(baseURL, "/api/v3")
 }
 
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	baseUrl := info.ChannelBaseUrl
 	if baseUrl == "" {
-		baseUrl = channelconstant.ChannelBaseURLs[channelconstant.ChannelTypeVolcEngine]
+		if info.ChannelType >= 0 && info.ChannelType < len(channelconstant.ChannelBaseURLs) {
+			baseUrl = channelconstant.ChannelBaseURLs[info.ChannelType]
+		}
+		if baseUrl == "" {
+			baseUrl = channelconstant.ChannelBaseURLs[channelconstant.ChannelTypeVolcEngine]
+		}
 	}
 	specialPlan, hasSpecialPlan := channelconstant.ChannelSpecialBases[baseUrl]
+	apiBaseURL := a.apiBaseURL(info, baseUrl)
 
 	switch info.RelayFormat {
 	case types.RelayFormatClaude:
@@ -251,7 +281,7 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 		if strings.HasPrefix(info.UpstreamModelName, "bot") {
 			return fmt.Sprintf("%s/api/v3/bots/chat/completions", baseUrl), nil
 		}
-		return fmt.Sprintf("%s/api/v3/chat/completions", baseUrl), nil
+		return fmt.Sprintf("%s/chat/completions", apiBaseURL), nil
 	default:
 		switch info.RelayMode {
 		case constant.RelayModeChatCompletions:
@@ -261,18 +291,18 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 			if strings.HasPrefix(info.UpstreamModelName, "bot") {
 				return fmt.Sprintf("%s/api/v3/bots/chat/completions", baseUrl), nil
 			}
-			return fmt.Sprintf("%s/api/v3/chat/completions", baseUrl), nil
+			return fmt.Sprintf("%s/chat/completions", apiBaseURL), nil
 		case constant.RelayModeEmbeddings:
-			return fmt.Sprintf("%s/api/v3/embeddings", baseUrl), nil
+			return fmt.Sprintf("%s/embeddings", apiBaseURL), nil
 		//豆包的图生图也走generations接口: https://www.volcengine.com/docs/82379/1824121
 		case constant.RelayModeImagesGenerations, constant.RelayModeImagesEdits:
-			return fmt.Sprintf("%s/api/v3/images/generations", baseUrl), nil
+			return fmt.Sprintf("%s/images/generations", apiBaseURL), nil
 		//case constant.RelayModeImagesEdits:
 		//	return fmt.Sprintf("%s/api/v3/images/edits", baseUrl), nil
 		case constant.RelayModeRerank:
-			return fmt.Sprintf("%s/api/v3/rerank", baseUrl), nil
+			return fmt.Sprintf("%s/rerank", apiBaseURL), nil
 		case constant.RelayModeResponses:
-			return fmt.Sprintf("%s/api/v3/responses", baseUrl), nil
+			return fmt.Sprintf("%s/responses", apiBaseURL), nil
 		case constant.RelayModeAudioSpeech:
 			if baseUrl == channelconstant.ChannelBaseURLs[channelconstant.ChannelTypeVolcEngine] {
 				return "wss://openspeech.bytedance.com/api/v1/tts/ws_binary", nil
@@ -394,9 +424,15 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 }
 
 func (a *Adaptor) GetModelList() []string {
+	if a.channelType == channelconstant.ChannelTypeVolcEngineAgentPlan {
+		return AgentPlanModelList
+	}
 	return ModelList
 }
 
 func (a *Adaptor) GetChannelName() string {
+	if a.channelType == channelconstant.ChannelTypeVolcEngineAgentPlan {
+		return AgentPlanChannelName
+	}
 	return ChannelName
 }

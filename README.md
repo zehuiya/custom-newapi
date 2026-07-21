@@ -223,7 +223,6 @@ docker run --name new-api -d --restart always \
 - 🔄 **OpenAI Compatible → Google Gemini**
 - 🔄 **Google Gemini → OpenAI Compatible** - Text only, function calling not supported yet
 - 🚧 **OpenAI Compatible ⇄ OpenAI Responses** - In development
-- 🔄 **Thinking-to-content functionality**
 
 **Reasoning Effort Support:**
 

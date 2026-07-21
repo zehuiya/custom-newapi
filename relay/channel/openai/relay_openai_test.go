@@ -53,6 +53,30 @@ func TestOpenaiHandlerWithUsageDoesNotDoubleCountPromptAndInputTokens(t *testing
 	require.Equal(t, "openai", usage.UsageSemantic)
 }
 
+func TestSendStreamDataPreservesReasoningContentWithoutThinkTags(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	var legacySettings dto.ChannelSettings
+	require.NoError(t, common.Unmarshal([]byte(`{"thinking_to_content":true}`), &legacySettings))
+	data := `{"choices":[{"index":0,"delta":{"reasoning_content":"hidden thought","content":"answer"}}]}`
+
+	for _, forceFormat := range []bool{false, true} {
+		t.Run(fmt.Sprintf("force_format_%t", forceFormat), func(t *testing.T) {
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest(http.MethodGet, "/v1/chat/completions", nil)
+			info := &relaycommon.RelayInfo{
+				ChannelMeta: &relaycommon.ChannelMeta{ChannelSetting: legacySettings},
+			}
+
+			require.NoError(t, sendStreamData(c, info, data, forceFormat))
+			require.Contains(t, w.Body.String(), `"reasoning_content":"hidden thought"`)
+			require.Contains(t, w.Body.String(), `"content":"answer"`)
+			require.NotContains(t, w.Body.String(), "<think>")
+			require.NotContains(t, w.Body.String(), "</think>")
+		})
+	}
+}
+
 func TestSyntheticCacheInjectionKeepsOpenAIPromptTokensInclusive(t *testing.T) {
 	usage := &dto.Usage{
 		PromptTokens:     20785,

@@ -199,6 +199,11 @@ export const CHANNEL_OPTIONS = [
     color: 'teal',
     label: 'Runware',
   },
+  {
+    value: 60,
+    color: 'blue',
+    label: '火山 Agent Plan',
+  },
 ];
 
 // Channel types that support upstream model list fetching in UI.

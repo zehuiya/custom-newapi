@@ -177,6 +177,10 @@ func InitTask(platform constant.TaskPlatform, relayInfo *commonRelay.RelayInfo) 
 			relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeVertexAi {
 			privateData.Key = relayInfo.ChannelMeta.ApiKey
 		}
+		if relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeVolcEngineAgentPlan &&
+			relayInfo.ChannelMeta.ChannelIsMultiKey {
+			privateData.Key = relayInfo.ChannelMeta.ApiKey
+		}
 		if relayInfo.UpstreamModelName != "" {
 			properties.UpstreamModelName = relayInfo.UpstreamModelName
 		}

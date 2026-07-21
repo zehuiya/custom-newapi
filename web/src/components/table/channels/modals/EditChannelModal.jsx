@@ -129,6 +129,257 @@ const PARAM_OVERRIDE_OPERATIONS_TEMPLATE = {
 
 const DEPRECATED_DOUBAO_CODING_PLAN_BASE_URL = 'doubao-coding-plan';
 
+const CHANNEL_CHANGE_FIELDS = [
+  { key: 'type', label: '类型', valueType: 'channelType' },
+  { key: 'name', label: '名称' },
+  { key: 'key', label: '密钥', sensitive: true },
+  { key: 'openai_organization', label: '组织' },
+  { key: 'base_url', label: 'API地址' },
+  { key: 'models', label: '模型', valueType: 'array' },
+  { key: 'groups', label: '分组', valueType: 'array' },
+  { key: 'multi_key_mode', label: '密钥聚合模式' },
+  { key: 'auto_ban', label: '是否自动禁用', valueType: 'boolean' },
+  { key: 'test_model', label: '默认测试模型' },
+  { key: 'other', label: '其他配置' },
+  { key: 'model_mapping', label: '模型重定向', valueType: 'json' },
+  { key: 'param_override', label: '参数覆盖', valueType: 'json' },
+  {
+    key: 'status_code_mapping',
+    label: '状态码复写',
+    valueType: 'json',
+  },
+  {
+    key: 'header_override',
+    label: '请求头覆盖',
+    valueType: 'json',
+    sensitive: true,
+  },
+  { key: 'tag', label: '渠道标签' },
+  { key: 'remark', label: '备注' },
+  { key: 'priority', label: '渠道优先级', valueType: 'number' },
+  { key: 'weight', label: '渠道权重', valueType: 'number' },
+  {
+    key: 'max_context_tokens',
+    label: '最大上下文',
+    valueType: 'number',
+  },
+  { key: 'max_output_tokens', label: '最大输出', valueType: 'number' },
+  { key: 'min_input_tokens', label: '最小输入', valueType: 'number' },
+  { key: 'max_input_tokens', label: '最大输入', valueType: 'number' },
+  { key: 'force_format', label: '强制格式化', valueType: 'boolean' },
+  {
+    key: 'pass_through_body_enabled',
+    label: '透传请求体',
+    valueType: 'boolean',
+  },
+  { key: 'proxy', label: '代理地址', sensitive: true },
+  { key: 'system_prompt', label: '系统提示词' },
+  {
+    key: 'system_prompt_override',
+    label: '系统提示词拼接',
+    valueType: 'boolean',
+  },
+  {
+    key: 'is_enterprise_account',
+    label: '是否为企业账户',
+    valueType: 'boolean',
+  },
+  { key: 'aws_key_type', label: '密钥格式' },
+  { key: 'vertex_key_type', label: '密钥格式' },
+  {
+    key: 'azure_responses_version',
+    label: '默认 Responses API 版本，为空则使用上方版本',
+  },
+  {
+    key: 'allow_service_tier',
+    label: '允许 service_tier 透传',
+    valueType: 'boolean',
+  },
+  {
+    key: 'disable_store',
+    label: '禁用 store 透传',
+    valueType: 'boolean',
+  },
+  {
+    key: 'allow_safety_identifier',
+    label: '允许 safety_identifier 透传',
+    valueType: 'boolean',
+  },
+  {
+    key: 'allow_include_obfuscation',
+    label: '允许 stream_options.include_obfuscation 透传',
+    valueType: 'boolean',
+  },
+  {
+    key: 'allow_inference_geo',
+    label: '允许 inference_geo 透传',
+    valueType: 'boolean',
+  },
+  { key: 'allow_speed', label: '允许 speed 透传', valueType: 'boolean' },
+  {
+    key: 'claude_beta_query',
+    label: 'Claude 强制 beta=true',
+    valueType: 'boolean',
+  },
+  {
+    key: 'upstream_model_update_check_enabled',
+    label: '是否检测上游模型更新',
+    valueType: 'boolean',
+  },
+  {
+    key: 'upstream_model_update_auto_sync_enabled',
+    label: '是否自动同步上游模型更新',
+    valueType: 'boolean',
+  },
+  {
+    key: 'upstream_model_update_ignored_models',
+    label: '已忽略模型',
+    valueType: 'array',
+  },
+];
+
+const sortJsonValue = (value) => {
+  if (Array.isArray(value)) {
+    return value.map(sortJsonValue);
+  }
+  if (value && typeof value === 'object') {
+    return Object.keys(value)
+      .sort()
+      .reduce((result, key) => {
+        result[key] = sortJsonValue(value[key]);
+        return result;
+      }, {});
+  }
+  return value;
+};
+
+const normalizeChannelChangeValue = (value, valueType) => {
+  if (valueType === 'boolean') {
+    return value === true || value === 1 || value === '1';
+  }
+  if (valueType === 'number') {
+    return Number(value || 0);
+  }
+  if (valueType === 'array') {
+    if (!Array.isArray(value)) {
+      return String(value || '')
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean);
+    }
+    return value.map((item) => String(item || '').trim()).filter(Boolean);
+  }
+  if (valueType === 'json') {
+    const raw = typeof value === 'string' ? value.trim() : value;
+    if (raw === '' || raw === undefined || raw === null) {
+      return '';
+    }
+    try {
+      const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      return JSON.stringify(sortJsonValue(parsed));
+    } catch {
+      return String(raw);
+    }
+  }
+  if (value === undefined || value === null) {
+    return '';
+  }
+  return String(value);
+};
+
+const redactSensitiveUrl = (value) =>
+  String(value || '')
+    .replace(/^([a-z][a-z\d+.-]*:\/\/)([^/@\s]+)@/i, '$1***@')
+    .replace(/([?&])([^=&#]+)=([^&#]*)/g, (match, prefix, rawKey) => {
+      let key = rawKey;
+      try {
+        key = decodeURIComponent(rawKey);
+      } catch {
+        // 保留无法解码的参数名并继续进行普通匹配。
+      }
+      return /(key|token|secret|password|passwd|credential|signature|authorization|auth)/i.test(
+        key,
+      )
+        ? `${prefix}${rawKey}=***`
+        : match;
+    });
+
+const formatChannelChangeValue = (value, config, t) => {
+  const normalized = normalizeChannelChangeValue(value, config.valueType);
+  if (config.valueType === 'boolean') {
+    return normalized ? t('开') : t('关');
+  }
+  if (config.valueType === 'channelType') {
+    const channel = CHANNEL_OPTIONS.find(
+      (option) => Number(option.value) === Number(value),
+    );
+    return channel?.label || String(value || t('未设置'));
+  }
+  if (config.valueType === 'array') {
+    return normalized.length > 0 ? normalized.join(', ') : t('未设置');
+  }
+  if (config.valueType === 'json' && normalized) {
+    try {
+      return JSON.stringify(JSON.parse(normalized), null, 2);
+    } catch {
+      return normalized;
+    }
+  }
+  if (config.key === 'base_url' && normalized) {
+    return redactSensitiveUrl(normalized);
+  }
+  return normalized === '' ? t('未设置') : String(normalized);
+};
+
+const collectChannelChanges = (beforeValues, afterValues, t, keyMode) =>
+  CHANNEL_CHANGE_FIELDS.reduce((changes, config) => {
+    const beforeValue = beforeValues?.[config.key];
+    const afterValue = afterValues?.[config.key];
+    const normalizedBefore = normalizeChannelChangeValue(
+      beforeValue,
+      config.valueType,
+    );
+    const normalizedAfter = normalizeChannelChangeValue(
+      afterValue,
+      config.valueType,
+    );
+    // 编辑接口不会返回旧密钥。空输入表示保留旧密钥，只有填写了新密钥时
+    // 才生成变更项，并且全程不展示任何密钥内容。
+    if (config.key === 'key' && normalizedAfter === '') {
+      return changes;
+    }
+    if (JSON.stringify(normalizedBefore) === JSON.stringify(normalizedAfter)) {
+      return changes;
+    }
+
+    let before = formatChannelChangeValue(beforeValue, config, t);
+    let after = formatChannelChangeValue(afterValue, config, t);
+    if (config.key === 'key') {
+      before = t('已配置（隐藏）');
+      const keyModeLabel =
+        keyMode === 'replace'
+          ? t('覆盖现有密钥')
+          : keyMode === 'append'
+            ? t('追加到现有密钥')
+            : '';
+      after = keyModeLabel ? `${t('已变更')}（${keyModeLabel}）` : t('已变更');
+    } else if (config.sensitive) {
+      const hadValue = normalizedBefore !== '';
+      const hasValue = normalizedAfter !== '';
+      before = hadValue ? t('已配置') : t('未设置');
+      after = hasValue ? t('已变更') : t('已清除');
+    }
+
+    changes.push({
+      key: config.key,
+      label: t(config.label),
+      before,
+      after,
+      sensitive: config.sensitive === true,
+    });
+    return changes;
+  }, []);
+
 // 支持并且已适配通过接口获取模型列表的渠道类型
 const MODEL_FETCHABLE_TYPES = new Set([
   1, 4, 14, 34, 17, 26, 27, 24, 47, 25, 20, 23, 31, 40, 42, 48, 43,
@@ -149,6 +400,8 @@ function type2secretPrompt(type) {
       return '按照如下格式输入：Ak|Sk|Region';
     case 45:
       return '请输入渠道对应的鉴权密钥, 豆包语音输入：AppId|AccessToken';
+    case 60:
+      return '请输入火山 Agent Plan 专属 API Key';
     case 50:
       return '按照如下格式输入: AccessKey|SecretKey, 如果上游是New API，则直接输ApiKey';
     case 51:
@@ -193,7 +446,6 @@ const EditChannelModal = (props) => {
     multi_key_mode: 'random',
     // 渠道额外设置的默认值
     force_format: false,
-    thinking_to_content: false,
     proxy: '',
     pass_through_body_enabled: false,
     system_prompt: '',
@@ -419,6 +671,12 @@ const EditChannelModal = (props) => {
   const initialModelsRef = useRef([]);
   const initialModelMappingRef = useRef('');
   const initialStatusCodeMappingRef = useRef('');
+  const initialChannelValuesRef = useRef({});
+  const pendingChannelUpdateRef = useRef(null);
+  const [channelChangeConfirmVisible, setChannelChangeConfirmVisible] =
+    useState(false);
+  const [channelChangeItems, setChannelChangeItems] = useState([]);
+  const [channelChangeSaving, setChannelChangeSaving] = useState(false);
   const doubaoCodingPlanDeprecationMessage =
     'Doubao Coding Plan 不再允许新增。根据火山方舟文档，Coding 套餐额度仅适用于 AI Coding 产品内调用，不适用于单独 API 调用；在非 AI Coding 产品中使用对应的 Base URL 和 API Key 可能被视为违规，并可能导致订阅停用或账号封禁。';
   const canKeepDeprecatedDoubaoCodingPlan =
@@ -498,7 +756,6 @@ const EditChannelModal = (props) => {
   // 渠道额外设置状态
   const [channelSettings, setChannelSettings] = useState({
     force_format: false,
-    thinking_to_content: false,
     proxy: '',
     pass_through_body_enabled: false,
     system_prompt: '',
@@ -653,6 +910,7 @@ const EditChannelModal = (props) => {
           localModels = ['suno_music', 'suno_lyrics'];
           break;
         case 45:
+        case 60:
           localModels = getChannelModels(value);
           setInputs((prevInputs) => ({
             ...prevInputs,
@@ -847,8 +1105,6 @@ const EditChannelModal = (props) => {
         try {
           const parsedSettings = JSON.parse(data.setting);
           data.force_format = parsedSettings.force_format || false;
-          data.thinking_to_content =
-            parsedSettings.thinking_to_content || false;
           data.proxy = parsedSettings.proxy || '';
           data.pass_through_body_enabled =
             parsedSettings.pass_through_body_enabled || false;
@@ -858,7 +1114,6 @@ const EditChannelModal = (props) => {
         } catch (error) {
           console.error('解析渠道设置失败:', error);
           data.force_format = false;
-          data.thinking_to_content = false;
           data.proxy = '';
           data.pass_through_body_enabled = false;
           data.system_prompt = '';
@@ -866,7 +1121,6 @@ const EditChannelModal = (props) => {
         }
       } else {
         data.force_format = false;
-        data.thinking_to_content = false;
         data.proxy = '';
         data.pass_through_body_enabled = false;
         data.system_prompt = '';
@@ -952,7 +1206,7 @@ const EditChannelModal = (props) => {
       }
 
       if (
-        data.type === 45 &&
+        (data.type === 45 || data.type === 60) &&
         (!data.base_url ||
           (typeof data.base_url === 'string' && data.base_url.trim() === ''))
       ) {
@@ -960,6 +1214,11 @@ const EditChannelModal = (props) => {
       }
 
       initialBaseUrlRef.current = data.base_url || '';
+      initialChannelValuesRef.current = {
+        ...data,
+        models: [...(data.models || [])],
+        groups: [...(data.groups || [])],
+      };
       setInputs(data);
       if (formApiRef.current) {
         formApiRef.current.setValues(data);
@@ -975,7 +1234,6 @@ const EditChannelModal = (props) => {
       // 同步更新channelSettings状态显示
       setChannelSettings({
         force_format: data.force_format,
-        thinking_to_content: data.thinking_to_content,
         proxy: data.proxy,
         pass_through_body_enabled: data.pass_through_body_enabled,
         system_prompt: data.system_prompt,
@@ -1022,7 +1280,6 @@ const EditChannelModal = (props) => {
         (data.max_input_tokens && data.max_input_tokens !== 0) ||
         (data.proxy && data.proxy.trim()) ||
         (data.system_prompt && data.system_prompt.trim()) ||
-        data.thinking_to_content ||
         data.pass_through_body_enabled ||
         data.force_format ||
         data.claude_beta_query ||
@@ -1368,7 +1625,6 @@ const EditChannelModal = (props) => {
     // 重置渠道设置状态
     setChannelSettings({
       force_format: false,
-      thinking_to_content: false,
       proxy: '',
       pass_through_body_enabled: false,
       system_prompt: '',
@@ -1390,6 +1646,11 @@ const EditChannelModal = (props) => {
     }
     // 重置本地输入，避免下次打开残留上一次的 JSON 字段值
     setInputs(getInitValues());
+    initialChannelValuesRef.current = {};
+    pendingChannelUpdateRef.current = null;
+    setChannelChangeItems([]);
+    setChannelChangeConfirmVisible(false);
+    setChannelChangeSaving(false);
     // 重置密钥显示状态
     resetKeyDisplayState();
     // 重置剪贴板检测状态
@@ -1528,6 +1789,46 @@ const EditChannelModal = (props) => {
     const normalizedMapping = (modelMappingStr || '').trim();
     const initialMapping = (initialModelMappingRef.current || '').trim();
     return normalizedMapping !== initialMapping;
+  };
+
+  const closeChannelChangeConfirm = () => {
+    if (channelChangeSaving) return;
+    pendingChannelUpdateRef.current = null;
+    setChannelChangeItems([]);
+    setChannelChangeConfirmVisible(false);
+  };
+
+  const confirmChannelUpdate = async () => {
+    if (channelChangeSaving || !pendingChannelUpdateRef.current) return;
+
+    // 先同步清空引用，避免用户快速重复点击时发送两次 PUT 请求。
+    const payload = pendingChannelUpdateRef.current;
+    pendingChannelUpdateRef.current = null;
+    setChannelChangeSaving(true);
+    try {
+      const res = await API.put('/api/channel/', payload);
+      if (!res) {
+        pendingChannelUpdateRef.current = payload;
+        return;
+      }
+      const { success, message } = res.data;
+      if (!success) {
+        pendingChannelUpdateRef.current = payload;
+        showError(message);
+        return;
+      }
+
+      setChannelChangeConfirmVisible(false);
+      setChannelChangeItems([]);
+      showSuccess(t('渠道更新成功！'));
+      props.refresh();
+      props.handleClose();
+    } catch (error) {
+      pendingChannelUpdateRef.current = payload;
+      showError(error?.message || t('更新失败'));
+    } finally {
+      setChannelChangeSaving(false);
+    }
   };
 
   const submit = async () => {
@@ -1738,7 +2039,6 @@ const EditChannelModal = (props) => {
     // 生成渠道额外设置JSON
     const channelExtraSettings = {
       force_format: localInputs.force_format || false,
-      thinking_to_content: localInputs.thinking_to_content || false,
       proxy: localInputs.proxy || '',
       pass_through_body_enabled: localInputs.pass_through_body_enabled || false,
       system_prompt: localInputs.system_prompt || '',
@@ -1817,9 +2117,22 @@ const EditChannelModal = (props) => {
 
     localInputs.settings = JSON.stringify(settings);
 
+    // 单密钥渠道不使用密钥聚合模式；编辑时不提交该表单默认值，
+    // 避免将未展示、未修改的 random 误判为渠道配置变更。
+    if (isEdit && !isMultiKeyChannel) {
+      delete localInputs.multi_key_mode;
+    }
+
+    // 二次确认使用表单语义值生成差异，避免将 settings/setting 内部 JSON
+    // 与界面上的同一配置重复展示。
+    const channelReviewValues = {
+      ...localInputs,
+      models: [...(localInputs.models || [])],
+      groups: [...(localInputs.groups || [])],
+    };
+
     // 清理不需要发送到后端的字段
     delete localInputs.force_format;
-    delete localInputs.thinking_to_content;
     delete localInputs.proxy;
     delete localInputs.pass_through_body_enabled;
     delete localInputs.system_prompt;
@@ -1843,7 +2156,6 @@ const EditChannelModal = (props) => {
     delete localInputs.upstream_model_update_last_detected_models;
     delete localInputs.upstream_model_update_ignored_models;
 
-    let res;
     localInputs.auto_ban = localInputs.auto_ban ? 1 : 0;
     localInputs.models = localInputs.models.join(',');
     localInputs.group = (localInputs.groups || []).join(',');
@@ -1854,26 +2166,37 @@ const EditChannelModal = (props) => {
     }
 
     if (isEdit) {
-      res = await API.put(`/api/channel/`, {
+      const channelChanges = collectChannelChanges(
+        initialChannelValuesRef.current,
+        channelReviewValues,
+        t,
+        isMultiKeyChannel ? keyMode : undefined,
+      );
+      if (channelChanges.length === 0) {
+        pendingChannelUpdateRef.current = null;
+        showInfo(t('未检测到内容变更'));
+        return;
+      }
+
+      pendingChannelUpdateRef.current = {
         ...localInputs,
         id: parseInt(channelId),
         key_mode: isMultiKeyChannel ? keyMode : undefined, // 只在多key模式下传递
-      });
-    } else {
-      res = await API.post(`/api/channel/`, {
-        mode: mode,
-        multi_key_mode: mode === 'multi_to_single' ? multiKeyMode : undefined,
-        channel: localInputs,
-      });
+      };
+      setChannelChangeItems(channelChanges);
+      setChannelChangeConfirmVisible(true);
+      return;
     }
+
+    const res = await API.post(`/api/channel/`, {
+      mode: mode,
+      multi_key_mode: mode === 'multi_to_single' ? multiKeyMode : undefined,
+      channel: localInputs,
+    });
     const { success, message } = res.data;
     if (success) {
-      if (isEdit) {
-        showSuccess(t('渠道更新成功！'));
-      } else {
-        showSuccess(t('渠道创建成功！'));
-        setInputs(originInputs);
-      }
+      showSuccess(t('渠道创建成功！'));
+      setInputs(originInputs);
       props.refresh();
       props.handleClose();
     } else {
@@ -2517,7 +2840,6 @@ const EditChannelModal = (props) => {
                   <Form.InputNumber field='min_input_tokens' label={t('最小输入')} min={0} step={1} onChange={(value) => handleInputChange('min_input_tokens', Number(value) || 0)} extraText={t('请求 input_tokens 小于该值时跳过此渠道，0 表示不限制')} />
                   <Form.InputNumber field='max_input_tokens' label={t('最大输入')} min={0} step={1} onChange={(value) => handleInputChange('max_input_tokens', Number(value) || 0)} extraText={t('请求 input_tokens 大于该值时跳过此渠道，0 表示不限制')} />
 
-                  <Form.Switch field='thinking_to_content' label={t('思考内容转换')} checkedText={t('开')} uncheckedText={t('关')} onChange={(value) => handleChannelSettingsChange('thinking_to_content', value)} extraText={t('将 reasoning_content 转换为 <think> 标签拼接到内容中')} />
                   <Form.Switch field='pass_through_body_enabled' label={t('透传请求体')} checkedText={t('开')} uncheckedText={t('关')} onChange={(value) => handleChannelSettingsChange('pass_through_body_enabled', value)} extraText={t('启用请求体透传功能')} />
 
                   <Form.Input field='proxy' label={t('代理地址')} placeholder={t('例如: socks5://user:pass@host:port')} onChange={(value) => handleChannelSettingsChange('proxy', value)} showClear extraText={t('用于配置网络代理，支持 socks5 协议')} />
@@ -3254,6 +3576,16 @@ const EditChannelModal = (props) => {
                               </Text>
                             </div>
                           }
+                              className='!rounded-lg'
+                            />
+                          )}
+
+                          {inputs.type === 60 && (
+                            <Banner
+                              type='warning'
+                              description={t(
+                                '火山 Agent Plan 使用专属 Base URL 和 API Key。请遵守火山官方适用场景限制；文本及向量模型不得作为普通 API 服务转发使用。',
+                              )}
                           className='!rounded-lg'
                         />
                       )}
@@ -3779,6 +4111,67 @@ const EditChannelModal = (props) => {
           onVisibleChange={(visible) => setIsModalOpenurl(visible)}
         />
       </SideSheet>
+      <Modal
+        visible={channelChangeConfirmVisible}
+        title={t('确认渠道修改')}
+        okText={t('确认保存')}
+        cancelText={t('返回修改')}
+        confirmLoading={channelChangeSaving}
+        maskClosable={!channelChangeSaving}
+        closeOnEsc={!channelChangeSaving}
+        centered
+        width={760}
+        style={{ maxWidth: '94vw' }}
+        onCancel={closeChannelChangeConfirm}
+        onOk={confirmChannelUpdate}
+      >
+        <div className='flex flex-col gap-3'>
+          <Text type='secondary'>
+            {t('请确认以下变更，确认后将立即保存。')}
+          </Text>
+          {channelChangeItems.length === 0 ? (
+            <Banner
+              type='info'
+              description={t('未检测到内容变更')}
+              className='!rounded-lg'
+            />
+          ) : (
+            <div className='max-h-[60vh] overflow-auto rounded-lg border border-gray-200 dark:border-gray-700'>
+              <div
+                className='sticky top-0 z-10 grid gap-3 border-b border-gray-200 bg-gray-50 px-3 py-2 text-xs font-medium text-gray-500 dark:border-gray-700 dark:bg-gray-800'
+                style={{
+                  gridTemplateColumns:
+                    'minmax(100px, 0.65fr) minmax(0, 1fr) minmax(0, 1fr)',
+                }}
+              >
+                <span>{t('修改项')}</span>
+                <span>{t('修改前')}</span>
+                <span>{t('修改后')}</span>
+              </div>
+              {channelChangeItems.map((item) => (
+                <div
+                  key={item.key}
+                  className='grid gap-3 border-b border-gray-100 px-3 py-3 last:border-b-0 dark:border-gray-800'
+                  style={{
+                    gridTemplateColumns:
+                      'minmax(100px, 0.65fr) minmax(0, 1fr) minmax(0, 1fr)',
+                  }}
+                >
+                  <Text strong className='break-words'>
+                    {item.label}
+                  </Text>
+                  <pre className='m-0 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-md bg-gray-50 p-2 text-xs text-gray-600 dark:bg-gray-800 dark:text-gray-300'>
+                    {item.before}
+                  </pre>
+                  <pre className='m-0 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-md bg-blue-50 p-2 text-xs text-blue-700 dark:bg-blue-950 dark:text-blue-300'>
+                    {item.after}
+                  </pre>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </Modal>
       <StatusCodeRiskGuardModal
         visible={statusCodeRiskConfirmVisible}
         detailItems={statusCodeRiskDetailItems}

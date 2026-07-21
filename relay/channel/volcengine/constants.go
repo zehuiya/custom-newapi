@@ -17,3 +17,45 @@ var ModelList = []string{
 }
 
 var ChannelName = "volcengine"
+
+// AgentPlanModelList contains the stable aliases exposed by Volcengine Agent Plan.
+// Keep this separate from ModelList because Agent Plan uses a dedicated API path
+// and subscription key, and the aliases are not regular Ark endpoint IDs.
+var AgentPlanModelList = []string{
+	// Text generation
+	"doubao-seed-2.0-mini",
+	"doubao-seed-2.0-lite",
+	"deepseek-v4-flash",
+	"doubao-seed-evolving",
+	"doubao-seed-2.0-code",
+	"doubao-seed-2.0-pro",
+	"minimax-m2.7",
+	"minimax-m3",
+	"glm-5.2",
+	"glm-latest",
+	"kimi-k2.6",
+	"kimi-k2.7-code",
+	"deepseek-v4-pro",
+	"kimi-k3",
+
+	// Embeddings
+	"doubao-embedding-vision",
+
+	// Image generation
+	"doubao-seedream-5.0-lite",
+
+	// Video generation
+	"doubao-seedance-1.5-pro",
+	"doubao-seedance-2.0",
+	"doubao-seedance-2.0-fast",
+	"doubao-seedance-2.0-mini",
+}
+
+var AgentPlanVideoModelList = []string{
+	"doubao-seedance-1.5-pro",
+	"doubao-seedance-2.0",
+	"doubao-seedance-2.0-fast",
+	"doubao-seedance-2.0-mini",
+}
+
+const AgentPlanChannelName = "volcengine-agent-plan"

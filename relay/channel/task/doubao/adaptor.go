@@ -15,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
+	"github.com/QuantumNous/new-api/relay/channel/volcengine"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 
@@ -102,22 +103,39 @@ type responseTask struct {
 
 type TaskAdaptor struct {
 	taskcommon.BaseBilling
-	ChannelType int
-	apiKey      string
-	baseURL     string
+	ChannelType   int
+	apiKey        string
+	baseURL       string
+	apiPathPrefix string
 }
 
 func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) {
 	a.ChannelType = info.ChannelType
 	a.baseURL = info.ChannelBaseUrl
 	a.apiKey = info.ApiKey
+	a.apiPathPrefix = "/api/v3"
+	if info.ChannelType == constant.ChannelTypeVolcEngineAgentPlan {
+		a.apiPathPrefix = "/api/plan/v3"
+	}
+}
+
+func (a *TaskAdaptor) apiBaseURL(baseURL string) string {
+	baseURL = strings.TrimRight(baseURL, "/")
+	pathPrefix := a.apiPathPrefix
+	if pathPrefix == "" {
+		pathPrefix = "/api/v3"
+	}
+	if strings.HasSuffix(baseURL, pathPrefix) {
+		return baseURL
+	}
+	return baseURL + pathPrefix
 }
 
 // ValidateRequestAndSetAction parses body, validates fields and sets default action.
 func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.TaskError) {
 	// Doubao 视频生成 API 使用 content 数组格式，需要自定义验证逻辑
 	// 不能使用通用的 ValidateBasicTaskRequest（它要求 prompt 字段）
-	
+
 	var payload requestPayload
 	if err := common.UnmarshalBodyReusable(c, &payload); err != nil {
 		return &dto.TaskError{
@@ -222,7 +240,7 @@ func buildMetadataFromPayload(payload *requestPayload) map[string]interface{} {
 
 // BuildRequestURL constructs the upstream URL.
 func (a *TaskAdaptor) BuildRequestURL(_ *relaycommon.RelayInfo) (string, error) {
-	return fmt.Sprintf("%s/api/v3/contents/generations/tasks", a.baseURL), nil
+	return fmt.Sprintf("%s/contents/generations/tasks", a.apiBaseURL(a.baseURL)), nil
 }
 
 // BuildRequestHeader sets required headers.
@@ -262,8 +280,12 @@ func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInf
 	// 2. 视频输入差异化计费
 	if config.SupportVideoInput {
 		hasVideo := hasVideoInMetadata(req.Metadata)
-		if hasVideo && config.VideoInputRatio != 0 && config.VideoInputRatio != 1.0 {
-			otherRatios["video_input"] = config.VideoInputRatio
+		videoInputRatio := config.VideoInputRatio
+		if ratio, exists := config.VideoInputRatios[parseResolution(req)]; exists {
+			videoInputRatio = ratio
+		}
+		if hasVideo && videoInputRatio != 0 && videoInputRatio != 1.0 {
+			otherRatios["video_input"] = videoInputRatio
 		}
 	}
 
@@ -340,15 +362,16 @@ func sizeToResolution(size string) string {
 	return "480p"
 }
 
-// parseGenerateAudio 从请求中提取 generate_audio 参数
+// parseGenerateAudio 从请求中提取 generate_audio 参数。
+// 火山视频生成 API 的默认值为 true，因此字段缺失或类型异常时按有声计费。
 func parseGenerateAudio(req relaycommon.TaskSubmitReq) bool {
 	if req.Metadata == nil {
-		return false
+		return true
 	}
 	if audio, ok := req.Metadata["generate_audio"].(bool); ok {
 		return audio
 	}
-	return false
+	return true
 }
 
 // hasVideoInMetadata 直接检查 metadata 的 content 数组是否包含 video_url 条目，
@@ -361,20 +384,25 @@ func hasVideoInMetadata(metadata map[string]interface{}) bool {
 	if !ok {
 		return false
 	}
-	contentSlice, ok := contentRaw.([]interface{})
-	if !ok {
-		return false
-	}
-	for _, item := range contentSlice {
-		itemMap, ok := item.(map[string]interface{})
-		if !ok {
-			continue
+	switch content := contentRaw.(type) {
+	case []ContentItem:
+		for _, item := range content {
+			if item.Type == "video_url" || item.VideoURL != nil {
+				return true
+			}
 		}
-		if itemMap["type"] == "video_url" {
-			return true
-		}
-		if _, has := itemMap["video_url"]; has {
-			return true
+	case []interface{}:
+		for _, item := range content {
+			itemMap, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if itemMap["type"] == "video_url" {
+				return true
+			}
+			if _, has := itemMap["video_url"]; has {
+				return true
+			}
 		}
 	}
 	return false
@@ -446,7 +474,7 @@ func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy 
 		return nil, fmt.Errorf("invalid task_id")
 	}
 
-	uri := fmt.Sprintf("%s/api/v3/contents/generations/tasks/%s", baseUrl, taskID)
+	uri := fmt.Sprintf("%s/contents/generations/tasks/%s", a.apiBaseURL(baseUrl), taskID)
 
 	req, err := http.NewRequest(http.MethodGet, uri, nil)
 	if err != nil {
@@ -465,10 +493,16 @@ func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy 
 }
 
 func (a *TaskAdaptor) GetModelList() []string {
+	if a.ChannelType == constant.ChannelTypeVolcEngineAgentPlan {
+		return volcengine.AgentPlanVideoModelList
+	}
 	return ModelList
 }
 
 func (a *TaskAdaptor) GetChannelName() string {
+	if a.ChannelType == constant.ChannelTypeVolcEngineAgentPlan {
+		return volcengine.AgentPlanChannelName
+	}
 	return ChannelName
 }
 
@@ -533,7 +567,7 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 		// 解析 usage 信息用于按倍率计费
 		taskResult.CompletionTokens = resTask.Usage.CompletionTokens
 		taskResult.TotalTokens = resTask.Usage.TotalTokens
-	case "failed":
+	case "failed", "cancelled", "canceled":
 		taskResult.Status = model.TaskStatusFailure
 		taskResult.Progress = "100%"
 		taskResult.Reason = resTask.Error.Message

@@ -91,6 +91,11 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 			}
 		}
 	}
+	if channel.Type == constant.ChannelTypeVolcEngineAgentPlan && strings.Contains(strings.ToLower(testModel), "seedance") {
+		return testResult{
+			localErr: fmt.Errorf("%s video channel test is not supported; use /v1/video/generations", constant.GetChannelTypeName(channel.Type)),
+		}
+	}
 
 	endpointType = normalizeChannelTestEndpoint(channel, testModel, endpointType)
 
@@ -118,7 +123,7 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 		}
 
 		// VolcEngine 图像生成模型
-		if channel.Type == constant.ChannelTypeVolcEngine && strings.Contains(testModel, "seedream") {
+		if (channel.Type == constant.ChannelTypeVolcEngine || channel.Type == constant.ChannelTypeVolcEngineAgentPlan) && strings.Contains(testModel, "seedream") {
 			requestPath = "/v1/images/generations"
 		}
 

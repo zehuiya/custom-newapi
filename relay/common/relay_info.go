@@ -20,12 +20,6 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-type ThinkingContentInfo struct {
-	IsFirstThinkingContent  bool
-	SendLastThinkingContent bool
-	HasSentThinkingContent  bool
-}
-
 const (
 	LastMessageTypeNone     = "none"
 	LastMessageTypeText     = "text"
@@ -174,7 +168,6 @@ type RelayInfo struct {
 
 	StreamStatus *StreamStatus
 
-	ThinkingContentInfo
 	TokenCountMeta
 	*ClaudeConvertInfo
 	*RerankerInfo
@@ -314,24 +307,25 @@ func (info *RelayInfo) ToString() string {
 
 // 定义支持流式选项的通道类型
 var streamSupportedChannels = map[int]bool{
-	constant.ChannelTypeOpenAI:      true,
-	constant.ChannelTypeAnthropic:   true,
-	constant.ChannelTypeAws:         true,
-	constant.ChannelTypeGemini:      true,
-	constant.ChannelCloudflare:      true,
-	constant.ChannelTypeAzure:       true,
-	constant.ChannelTypeVolcEngine:  true,
-	constant.ChannelTypeOllama:      true,
-	constant.ChannelTypeXai:         true,
-	constant.ChannelTypeDeepSeek:    true,
-	constant.ChannelTypeBaiduV2:     true,
-	constant.ChannelTypeZhipu_v4:    true,
-	constant.ChannelTypeAli:         true,
-	constant.ChannelTypeSubmodel:    true,
-	constant.ChannelTypeCodex:       true,
-	constant.ChannelTypeMoonshot:    true,
-	constant.ChannelTypeMiniMax:     true,
-	constant.ChannelTypeSiliconFlow: true,
+	constant.ChannelTypeOpenAI:              true,
+	constant.ChannelTypeAnthropic:           true,
+	constant.ChannelTypeAws:                 true,
+	constant.ChannelTypeGemini:              true,
+	constant.ChannelCloudflare:              true,
+	constant.ChannelTypeAzure:               true,
+	constant.ChannelTypeVolcEngine:          true,
+	constant.ChannelTypeVolcEngineAgentPlan: true,
+	constant.ChannelTypeOllama:              true,
+	constant.ChannelTypeXai:                 true,
+	constant.ChannelTypeDeepSeek:            true,
+	constant.ChannelTypeBaiduV2:             true,
+	constant.ChannelTypeZhipu_v4:            true,
+	constant.ChannelTypeAli:                 true,
+	constant.ChannelTypeSubmodel:            true,
+	constant.ChannelTypeCodex:               true,
+	constant.ChannelTypeMoonshot:            true,
+	constant.ChannelTypeMiniMax:             true,
+	constant.ChannelTypeSiliconFlow:         true,
 }
 
 func GenRelayInfoWs(c *gin.Context, ws *websocket.Conn) *RelayInfo {
@@ -481,10 +475,6 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 
 		StartTime:         startTime,
 		FirstResponseTime: startTime.Add(-time.Second),
-		ThinkingContentInfo: ThinkingContentInfo{
-			IsFirstThinkingContent:  true,
-			SendLastThinkingContent: false,
-		},
 		TokenCountMeta: TokenCountMeta{
 			//promptTokens: common.GetContextKeyInt(c, constant.ContextKeyPromptTokens),
 			estimatePromptTokens: common.GetContextKeyInt(c, constant.ContextKeyEstimatedTokens),

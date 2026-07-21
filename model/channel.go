@@ -253,12 +253,18 @@ func (channel *Channel) GetAutoBan() bool {
 }
 
 func (channel *Channel) Save() error {
+	if err := channel.ValidateSettings(); err != nil {
+		return err
+	}
 	return DB.Save(channel).Error
 }
 
 func (channel *Channel) SaveWithoutKey() error {
 	if channel.Id == 0 {
 		return errors.New("channel ID is 0")
+	}
+	if err := channel.ValidateSettings(); err != nil {
+		return err
 	}
 	return DB.Omit("key").Save(channel).Error
 }
@@ -361,6 +367,11 @@ func GetChannelById(id int, selectAll bool) (*Channel, error) {
 func BatchInsertChannels(channels []Channel) error {
 	if len(channels) == 0 {
 		return nil
+	}
+	for i := range channels {
+		if err := channels[i].ValidateSettings(); err != nil {
+			return err
+		}
 	}
 	tx := DB.Begin()
 	if tx.Error != nil {
@@ -477,6 +488,9 @@ func (channel *Channel) GetStatusCodeMapping() string {
 }
 
 func (channel *Channel) Insert() error {
+	if err := channel.ValidateSettings(); err != nil {
+		return err
+	}
 	var err error
 	err = DB.Create(channel).Error
 	if err != nil {
@@ -487,6 +501,9 @@ func (channel *Channel) Insert() error {
 }
 
 func (channel *Channel) Update() error {
+	if err := channel.ValidateSettings(); err != nil {
+		return err
+	}
 	// If this is a multi-key channel, recalculate MultiKeySize based on the current key list to avoid inconsistency after editing keys
 	if channel.ChannelInfo.IsMultiKey {
 		var keyStr string
@@ -875,10 +892,26 @@ func SearchTags(keyword string, group string, model string, idSort bool) ([]*str
 func (channel *Channel) ValidateSettings() error {
 	channelParams := &dto.ChannelSettings{}
 	if channel.Setting != nil && *channel.Setting != "" {
-		err := common.Unmarshal([]byte(*channel.Setting), channelParams)
+		settingBytes := []byte(*channel.Setting)
+		if err := common.Unmarshal(settingBytes, channelParams); err != nil {
+			return err
+		}
+
+		// thinking_to_content has been retired. Strip it from every write path so
+		// legacy clients cannot persist or reactivate the old conversion behavior.
+		settingMap := make(map[string]json.RawMessage)
+		if err := common.Unmarshal(settingBytes, &settingMap); err != nil {
+			return err
+		}
+		if _, exists := settingMap["thinking_to_content"]; !exists {
+			return nil
+		}
+		delete(settingMap, "thinking_to_content")
+		normalizedBytes, err := common.Marshal(settingMap)
 		if err != nil {
 			return err
 		}
+		channel.Setting = common.GetPointer(string(normalizedBytes))
 	}
 	return nil
 }

@@ -26,6 +26,8 @@ type SeedanceBillingConfig struct {
 	ResolutionRatios map[string]float64
 	// VideoInputRatio 有视频输入时的折扣（相对于无视频）
 	VideoInputRatio float64
+	// VideoInputRatios 按分辨率配置有视频输入时的折扣（相对于同分辨率无视频）
+	VideoInputRatios map[string]float64
 	// NoAudioRatio 无声视频的折扣（相对于有声）
 	NoAudioRatio float64
 }
@@ -39,11 +41,16 @@ var seedanceBillingConfigs = map[string]SeedanceBillingConfig{
 		SupportVideoInput: true,
 		SupportAudio:      false,
 		ResolutionRatios: map[string]float64{
-			"480p":  1.0,      // 基准
-			"720p":  1.0,      // 与 480p 同价
+			"480p":  1.0,         // 基准
+			"720p":  1.0,         // 与 480p 同价
 			"1080p": 51.0 / 46.0, // 51元 / 46元 ≈ 1.109
 		},
-		VideoInputRatio: 28.0 / 46.0, // 含视频：28元，不含：46元 ≈ 0.609
+		VideoInputRatio: 28.0 / 46.0, // 未知分辨率沿用 480p/720p 折扣
+		VideoInputRatios: map[string]float64{
+			"480p":  28.0 / 46.0, // 含视频 28元 / 不含视频 46元
+			"720p":  28.0 / 46.0,
+			"1080p": 31.0 / 51.0, // 含视频 31元 / 不含视频 51元
+		},
 	},
 	"doubao-seedance-2-0-fast-260128": {
 		BaseScenario:      "480p/720p 不含视频输入",
@@ -82,8 +89,20 @@ var seedanceBillingConfigs = map[string]SeedanceBillingConfig{
 	},
 }
 
+// Agent Plan exposes stable model aliases while the regular Ark API uses
+// versioned model IDs. Both names must resolve to the same billing baseline so
+// that switching channel types does not silently disable differential pricing.
+var seedanceBillingAliases = map[string]string{
+	"doubao-seedance-1.5-pro":  "doubao-seedance-1-5-pro-251215",
+	"doubao-seedance-2.0":      "doubao-seedance-2-0-260128",
+	"doubao-seedance-2.0-fast": "doubao-seedance-2-0-fast-260128",
+}
+
 // GetSeedanceBillingConfig 获取指定模型的计费配置
 func GetSeedanceBillingConfig(modelName string) (SeedanceBillingConfig, bool) {
+	if canonicalModel, ok := seedanceBillingAliases[modelName]; ok {
+		modelName = canonicalModel
+	}
 	config, ok := seedanceBillingConfigs[modelName]
 	return config, ok
 }
