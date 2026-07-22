@@ -78,19 +78,26 @@ func TestSendStreamDataPreservesReasoningContentWithoutThinkTags(t *testing.T) {
 }
 
 func TestSyntheticCacheInjectionKeepsOpenAIPromptTokensInclusive(t *testing.T) {
+	percentage := 60
 	usage := &dto.Usage{
 		PromptTokens:     20785,
 		CompletionTokens: 104,
 		TotalTokens:      20889,
 	}
 
-	changed := injectSyntheticCacheInfoForOpenAIUsage(usage)
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{
+		ChannelSetting: dto.ChannelSettings{
+			CacheEnabled:       true,
+			CachePercentageMin: &percentage,
+			CachePercentageMax: &percentage,
+		},
+	}}
+	changed := injectSyntheticCacheInfoForOpenAIUsage(usage, info)
 
 	require.True(t, changed)
 	require.Equal(t, 20785, usage.PromptTokens)
 	require.Equal(t, 20889, usage.TotalTokens)
-	require.GreaterOrEqual(t, usage.PromptTokensDetails.CachedTokens, 20785*50/100)
-	require.LessOrEqual(t, usage.PromptTokensDetails.CachedTokens, 20785*90/100)
+	require.Equal(t, 20785*percentage/100, usage.PromptTokensDetails.CachedTokens)
 	require.GreaterOrEqual(t, usage.PromptTokens-usage.PromptTokensDetails.CachedTokens, 0)
 }
 
@@ -102,11 +109,54 @@ func TestSyntheticCacheInjectionDoesNotOverwriteUpstreamCacheTokens(t *testing.T
 		},
 	}
 
-	changed := injectSyntheticCacheInfoForOpenAIUsage(usage)
+	changed := injectSyntheticCacheInfoForOpenAIUsage(usage, &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{ChannelSetting: dto.ChannelSettings{CacheEnabled: true}},
+	})
 
 	require.False(t, changed)
 	require.Equal(t, 5000, usage.PromptTokens)
 	require.Equal(t, 1234, usage.PromptTokensDetails.CachedTokens)
+}
+
+func TestOpenaiHandlerSyntheticCacheDoesNotReplaceProviderSpecificCache(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body: io.NopCloser(strings.NewReader(`{
+			"id": "chatcmpl-cache-test",
+			"choices": [],
+			"usage": {
+				"prompt_tokens": 5000,
+				"completion_tokens": 10,
+				"total_tokens": 5010,
+				"prompt_cache_hit_tokens": 2000
+			}
+		}`)),
+	}
+	percentage := 60
+	info := &relaycommon.RelayInfo{
+		RelayFormat:           types.RelayFormatOpenAI,
+		ShouldInjectCacheInfo: true,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelType: constant.ChannelTypeDeepSeek,
+			ChannelSetting: dto.ChannelSettings{
+				CacheEnabled:       true,
+				CachePercentageMin: &percentage,
+				CachePercentageMax: &percentage,
+			},
+		},
+	}
+
+	usage, err := OpenaiHandler(c, info, resp)
+
+	require.Nil(t, err)
+	require.Equal(t, 2000, usage.PromptTokensDetails.CachedTokens)
+	var body dto.OpenAITextResponse
+	require.NoError(t, common.Unmarshal(w.Body.Bytes(), &body))
+	require.Equal(t, 2000, body.Usage.PromptTokensDetails.CachedTokens)
 }
 
 func TestOpenaiHandlerNoCacheMovesCacheReadIntoInputInResponse(t *testing.T) {
@@ -138,7 +188,8 @@ func TestOpenaiHandlerNoCacheMovesCacheReadIntoInputInResponse(t *testing.T) {
 	usage, err := OpenaiHandler(c, &relaycommon.RelayInfo{
 		RelayFormat: types.RelayFormatOpenAI,
 		ChannelMeta: &relaycommon.ChannelMeta{
-			ChannelName: "openai-[no_cache]",
+			ChannelName:    "openai",
+			ChannelSetting: dto.ChannelSettings{NoCacheEnabled: true},
 		},
 	}, resp)
 
@@ -186,7 +237,8 @@ func TestOaiResponsesHandlerNoCacheMovesCacheReadIntoInputResponse(t *testing.T)
 
 	usage, err := OaiResponsesHandler(c, &relaycommon.RelayInfo{
 		ChannelMeta: &relaycommon.ChannelMeta{
-			ChannelName: "responses-[no_cache]",
+			ChannelName:    "responses",
+			ChannelSetting: dto.ChannelSettings{NoCacheEnabled: true},
 		},
 	}, resp)
 
@@ -210,7 +262,8 @@ func TestOaiResponsesHandlerNoCacheMovesCacheReadIntoInputResponse(t *testing.T)
 func TestRewriteOpenAIStreamUsageDataWithNoCacheUsage(t *testing.T) {
 	info := &relaycommon.RelayInfo{
 		ChannelMeta: &relaycommon.ChannelMeta{
-			ChannelName: "openai-[no_cache]",
+			ChannelName:    "openai",
+			ChannelSetting: dto.ChannelSettings{NoCacheEnabled: true},
 		},
 	}
 	usage := &dto.Usage{
@@ -321,7 +374,8 @@ func TestOaiStreamHandlerFillsMissingReasoningTokensInUsageChunk(t *testing.T) {
 func TestRewriteResponsesUsagePayloadWithNoCacheStreamUsage(t *testing.T) {
 	info := &relaycommon.RelayInfo{
 		ChannelMeta: &relaycommon.ChannelMeta{
-			ChannelName: "responses-[no_cache]",
+			ChannelName:    "responses",
+			ChannelSetting: dto.ChannelSettings{NoCacheEnabled: true},
 		},
 	}
 	usage := &dto.Usage{}

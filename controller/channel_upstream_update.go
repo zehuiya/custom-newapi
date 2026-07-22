@@ -326,7 +326,14 @@ func fetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
 	return normalizeModelNames(ids), nil
 }
 
-func updateChannelUpstreamModelSettings(channel *model.Channel, settings dto.ChannelOtherSettings, updateModels bool) error {
+func updateChannelUpstreamModelSettings(
+	channel *model.Channel,
+	settings dto.ChannelOtherSettings,
+	updateModels bool,
+	actor model.ChannelAuditActor,
+	source string,
+	batchID string,
+) error {
 	channel.SetOtherSettings(settings)
 	updates := map[string]interface{}{
 		"settings": channel.OtherSettings,
@@ -334,7 +341,47 @@ func updateChannelUpstreamModelSettings(channel *model.Channel, settings dto.Cha
 	if updateModels {
 		updates["models"] = channel.Models
 	}
-	return model.DB.Model(&model.Channel{}).Where("id = ?", channel.Id).Updates(updates).Error
+
+	tx := model.DB.Begin()
+	if tx.Error != nil {
+		return tx.Error
+	}
+	defer tx.Rollback()
+
+	before := &model.Channel{}
+	if err := model.WithChannelMutationLock(tx).First(before, "id = ?", channel.Id).Error; err != nil {
+		return err
+	}
+	if err := tx.Model(&model.Channel{}).Where("id = ?", channel.Id).Updates(updates).Error; err != nil {
+		return err
+	}
+	after := &model.Channel{}
+	if err := tx.First(after, "id = ?", channel.Id).Error; err != nil {
+		return err
+	}
+	if updateModels {
+		if err := after.UpdateAbilities(tx); err != nil {
+			return err
+		}
+	}
+	if err := model.RecordChannelAuditPairs(
+		tx,
+		actor,
+		source,
+		batchID,
+		[]model.ChannelAuditPair{{
+			Before: before,
+			After:  after,
+			Action: model.ChannelAuditActionModelSync,
+		}},
+	); err != nil {
+		return err
+	}
+	if err := tx.Commit().Error; err != nil {
+		return err
+	}
+	*channel = *after
+	return nil
 }
 
 func checkAndPersistChannelUpstreamModelUpdates(
@@ -342,6 +389,9 @@ func checkAndPersistChannelUpstreamModelUpdates(
 	settings *dto.ChannelOtherSettings,
 	force bool,
 	allowAutoApply bool,
+	actor model.ChannelAuditActor,
+	source string,
+	batchID string,
 ) (modelsChanged bool, autoAdded int, err error) {
 	now := common.GetTimestamp()
 	if !force {
@@ -355,7 +405,7 @@ func checkAndPersistChannelUpstreamModelUpdates(
 	pendingAddModels, pendingRemoveModels, fetchErr := collectPendingUpstreamModelChanges(channel, *settings)
 	settings.UpstreamModelUpdateLastCheckTime = now
 	if fetchErr != nil {
-		if err = updateChannelUpstreamModelSettings(channel, *settings, false); err != nil {
+		if err = updateChannelUpstreamModelSettings(channel, *settings, false, actor, source, batchID); err != nil {
 			return false, 0, err
 		}
 		return false, 0, fetchErr
@@ -375,13 +425,8 @@ func checkAndPersistChannelUpstreamModelUpdates(
 	}
 	settings.UpstreamModelUpdateLastRemovedModels = pendingRemoveModels
 
-	if err = updateChannelUpstreamModelSettings(channel, *settings, modelsChanged); err != nil {
+	if err = updateChannelUpstreamModelSettings(channel, *settings, modelsChanged, actor, source, batchID); err != nil {
 		return false, autoAdded, err
-	}
-	if modelsChanged {
-		if err = channel.UpdateAbilities(nil); err != nil {
-			return true, autoAdded, err
-		}
 	}
 	return modelsChanged, autoAdded, nil
 }
@@ -504,6 +549,11 @@ func runChannelUpstreamModelUpdateTaskOnce() {
 		return
 	}
 	defer channelUpstreamModelUpdateTaskRunning.Store(false)
+	auditActor := model.ChannelAuditActor{
+		Type: model.ChannelAuditActorSystem,
+		Name: "system",
+	}
+	auditBatchID := common.GetUUID()
 
 	checkedChannels := 0
 	failedChannels := 0
@@ -549,7 +599,15 @@ func runChannelUpstreamModelUpdateTaskOnce() {
 			}
 
 			checkedChannels++
-			modelsChanged, autoAdded, err := checkAndPersistChannelUpstreamModelUpdates(channel, &settings, false, true)
+			modelsChanged, autoAdded, err := checkAndPersistChannelUpstreamModelUpdates(
+				channel,
+				&settings,
+				false,
+				true,
+				auditActor,
+				"channel_upstream_auto_sync",
+				auditBatchID,
+			)
 			if err != nil {
 				failedChannels++
 				failedChannelIDs = append(failedChannelIDs, channel.Id)
@@ -687,6 +745,9 @@ func ApplyChannelUpstreamModelUpdates(c *gin.Context) {
 		req.AddModels,
 		req.IgnoreModels,
 		req.RemoveModels,
+		NewChannelAuditActor(c),
+		"channel_upstream_apply",
+		"",
 	)
 	if err != nil {
 		common.ApiError(c, err)
@@ -734,7 +795,15 @@ func DetectChannelUpstreamModelUpdates(c *gin.Context) {
 	}
 
 	settings := channel.GetOtherSettings()
-	modelsChanged, autoAdded, err := checkAndPersistChannelUpstreamModelUpdates(channel, &settings, true, false)
+	modelsChanged, autoAdded, err := checkAndPersistChannelUpstreamModelUpdates(
+		channel,
+		&settings,
+		true,
+		false,
+		NewChannelAuditActor(c),
+		"channel_upstream_detect",
+		"",
+	)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -762,6 +831,9 @@ func applyChannelUpstreamModelUpdates(
 	addModelsInput []string,
 	ignoreModelsInput []string,
 	removeModelsInput []string,
+	actor model.ChannelAuditActor,
+	source string,
+	batchID string,
 ) (
 	addedModels []string,
 	removedModels []string,
@@ -795,14 +867,8 @@ func applyChannelUpstreamModelUpdates(
 	settings.UpstreamModelUpdateLastRemovedModels = remainingRemoveModels
 	settings.UpstreamModelUpdateLastCheckTime = common.GetTimestamp()
 
-	if err := updateChannelUpstreamModelSettings(channel, settings, modelsChanged); err != nil {
+	if err := updateChannelUpstreamModelSettings(channel, settings, modelsChanged, actor, source, batchID); err != nil {
 		return nil, nil, nil, nil, false, err
-	}
-
-	if modelsChanged {
-		if err := channel.UpdateAbilities(nil); err != nil {
-			return addModels, removeModels, remainingModels, remainingRemoveModels, true, err
-		}
 	}
 	return addModels, removeModels, remainingModels, remainingRemoveModels, modelsChanged, nil
 }
@@ -830,6 +896,8 @@ func ApplyAllChannelUpstreamModelUpdates(c *gin.Context) {
 	refreshNeeded := false
 	addedModelCount := 0
 	removedModelCount := 0
+	auditActor := NewChannelAuditActor(c)
+	auditBatchID := common.GetUUID()
 
 	lastID := 0
 	for {
@@ -863,6 +931,9 @@ func ApplyAllChannelUpstreamModelUpdates(c *gin.Context) {
 				pendingAddModels,
 				nil,
 				pendingRemoveModels,
+				auditActor,
+				"channel_upstream_apply_all",
+				auditBatchID,
 			)
 			if err != nil {
 				failed = append(failed, channel.Id)
@@ -911,6 +982,8 @@ func DetectAllChannelUpstreamModelUpdates(c *gin.Context) {
 	detectedAddCount := 0
 	detectedRemoveCount := 0
 	refreshNeeded := false
+	auditActor := NewChannelAuditActor(c)
+	auditBatchID := common.GetUUID()
 
 	lastID := 0
 	for {
@@ -933,7 +1006,15 @@ func DetectAllChannelUpstreamModelUpdates(c *gin.Context) {
 				continue
 			}
 
-			modelsChanged, autoAdded, err := checkAndPersistChannelUpstreamModelUpdates(channel, &settings, true, false)
+			modelsChanged, autoAdded, err := checkAndPersistChannelUpstreamModelUpdates(
+				channel,
+				&settings,
+				true,
+				false,
+				auditActor,
+				"channel_upstream_detect_all",
+				auditBatchID,
+			)
 			if err != nil {
 				failed = append(failed, channel.Id)
 				continue

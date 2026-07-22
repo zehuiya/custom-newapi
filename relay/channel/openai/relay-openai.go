@@ -3,7 +3,6 @@ package openai
 import (
 	"fmt"
 	"io"
-	"math/rand"
 	"net/http"
 	"strings"
 
@@ -23,22 +22,11 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// calculateCachedTokens 计算缓存token数量：随机抽取50-90%的输入作为缓存
-func calculateCachedTokens(totalPromptTokens int) int {
-	if totalPromptTokens == 0 {
-		return 0
-	}
-	// 生成50-90之间的随机整数百分比
-	percentage := rand.Intn(41) + 50 // 50到90之间的随机数
-	cachedTokens := (totalPromptTokens * percentage) / 100
-	return cachedTokens
-}
-
-func injectSyntheticCacheInfoForOpenAIUsage(usage *dto.Usage) bool {
-	if usage == nil || usage.PromptTokens <= 0 || usage.PromptTokensDetails.CachedTokens != 0 {
+func injectSyntheticCacheInfoForOpenAIUsage(usage *dto.Usage, info *relaycommon.RelayInfo) bool {
+	if usage == nil || info == nil || usage.PromptTokens <= 0 || usage.PromptTokensDetails.CachedTokens != 0 {
 		return false
 	}
-	usage.PromptTokensDetails.CachedTokens = calculateCachedTokens(usage.PromptTokens)
+	usage.PromptTokensDetails.CachedTokens = info.CalculateSyntheticCacheTokens(usage.PromptTokens)
 	return true
 }
 
@@ -156,13 +144,16 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 
 	// 注入/归一化缓存信息到lastStreamData中（如果包含usage）
 	if containStreamUsage && usage != nil {
+		cacheTokensBeforePostProcessing := usage.PromptTokensDetails.CachedTokens
 		applyUsagePostProcessing(info, usage, common.StringToByteSlice(lastStreamData))
-		usageModifiedInLastStream := false
+		usageModifiedInLastStream := info.ShouldInjectCacheInfo &&
+			cacheTokensBeforePostProcessing == 0 &&
+			usage.PromptTokensDetails.CachedTokens > 0
 		if service.FillMissingReasoningTokens(c, usage, reasoningText, outputText, model) {
 			usageModifiedInLastStream = true
 		}
 		if info.ShouldInjectCacheInfo && usage.PromptTokensDetails.CachedTokens == 0 && usage.PromptTokens >= 4096 {
-			usageModifiedInLastStream = injectSyntheticCacheInfoForOpenAIUsage(usage)
+			usageModifiedInLastStream = injectSyntheticCacheInfoForOpenAIUsage(usage, info)
 		}
 		if service.NormalizeNoCacheUsageForRelay(c, info, usage) {
 			usageModifiedInLastStream = true
@@ -269,12 +260,22 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 		usageModified = true
 	}
 
-	// 注入缓存信息：如果渠道名包含[cache]、输入token>=4096、且上游未返回缓存数据
-	if info.ShouldInjectCacheInfo && simpleResponse.Usage.PromptTokensDetails.CachedTokens == 0 {
-		usageModified = injectSyntheticCacheInfoForOpenAIUsage(&simpleResponse.Usage)
+	// Normalize provider-specific cache fields before deciding whether the
+	// upstream omitted cache usage. This prevents synthetic data from replacing
+	// real cache data reported outside the OpenAI-standard field.
+	cacheTokensBeforePostProcessing := simpleResponse.Usage.PromptTokensDetails.CachedTokens
+	applyUsagePostProcessing(info, &simpleResponse.Usage, responseBody)
+	if info.ShouldInjectCacheInfo &&
+		cacheTokensBeforePostProcessing == 0 &&
+		simpleResponse.Usage.PromptTokensDetails.CachedTokens > 0 {
+		usageModified = true
 	}
 
-	applyUsagePostProcessing(info, &simpleResponse.Usage, responseBody)
+	// 根据渠道配置注入缓存信息；已有上游缓存数据时不会覆盖。
+	if info.ShouldInjectCacheInfo && simpleResponse.Usage.PromptTokensDetails.CachedTokens == 0 {
+		usageModified = injectSyntheticCacheInfoForOpenAIUsage(&simpleResponse.Usage, info)
+	}
+
 	if service.NormalizeNoCacheUsageForRelay(c, info, &simpleResponse.Usage) {
 		usageModified = true
 	}

@@ -6,6 +6,34 @@ type ChannelSettings struct {
 	PassThroughBodyEnabled bool   `json:"pass_through_body_enabled,omitempty"`
 	SystemPrompt           string `json:"system_prompt,omitempty"`
 	SystemPromptOverride   bool   `json:"system_prompt_override,omitempty"`
+	CacheEnabled           bool   `json:"cache_enabled,omitempty"`
+	CachePercentageMin     *int   `json:"cache_percentage_min,omitempty"`
+	CachePercentageMax     *int   `json:"cache_percentage_max,omitempty"`
+	NoCacheEnabled         bool   `json:"no_cache_enabled,omitempty"`
+}
+
+const (
+	DefaultCachePercentageMin = 50
+	DefaultCachePercentageMax = 90
+)
+
+// GetCachePercentageRange returns the configured synthetic cache range while
+// preserving the original 50%-90% behavior for channels created before these
+// settings existed.
+func (s ChannelSettings) GetCachePercentageRange() (int, int) {
+	minPercentage := DefaultCachePercentageMin
+	maxPercentage := DefaultCachePercentageMax
+	if s.CachePercentageMin != nil {
+		minPercentage = *s.CachePercentageMin
+	}
+	if s.CachePercentageMax != nil {
+		maxPercentage = *s.CachePercentageMax
+	}
+	return minPercentage, maxPercentage
+}
+
+func (s ChannelSettings) ShouldInjectCache(estimatedPromptTokens int) bool {
+	return s.CacheEnabled && !s.NoCacheEnabled && estimatedPromptTokens >= 4096
 }
 
 type VertexKeyType string

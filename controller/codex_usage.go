@@ -17,6 +17,40 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func persistCodexUsageCredentialRefresh(c *gin.Context, channelID int, encoded []byte) error {
+	tx := model.DB.WithContext(c.Request.Context()).Begin()
+	if tx.Error != nil {
+		return tx.Error
+	}
+	defer tx.Rollback()
+
+	before := &model.Channel{}
+	if err := model.WithChannelMutationLock(tx).First(before, "id = ?", channelID).Error; err != nil {
+		return err
+	}
+	if err := tx.Model(&model.Channel{}).Where("id = ?", channelID).Update("key", string(encoded)).Error; err != nil {
+		return err
+	}
+	after := &model.Channel{}
+	if err := tx.First(after, "id = ?", channelID).Error; err != nil {
+		return err
+	}
+	if err := model.RecordChannelAuditPairs(
+		tx,
+		NewChannelAuditActor(c),
+		"channel_codex_usage_credential_refresh",
+		"",
+		[]model.ChannelAuditPair{{
+			Before: before,
+			After:  after,
+			Action: model.ChannelAuditActionCredentialChange,
+		}},
+	); err != nil {
+		return err
+	}
+	return tx.Commit().Error
+}
+
 func GetCodexChannelUsage(c *gin.Context) {
 	channelId, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
@@ -91,9 +125,12 @@ func GetCodexChannelUsage(c *gin.Context) {
 
 			encoded, encErr := common.Marshal(oauthKey)
 			if encErr == nil {
-				_ = model.DB.Model(&model.Channel{}).Where("id = ?", ch.Id).Update("key", string(encoded)).Error
-				model.InitChannelCache()
-				service.ResetProxyClientCache()
+				if persistErr := persistCodexUsageCredentialRefresh(c, ch.Id, encoded); persistErr != nil {
+					common.SysError(fmt.Sprintf("failed to persist refreshed Codex credential: channel_id=%d error=%v", ch.Id, persistErr))
+				} else {
+					model.InitChannelCache()
+					service.ResetProxyClientCache()
+				}
 			}
 
 			ctx2, cancel2 := context.WithTimeout(c.Request.Context(), 15*time.Second)

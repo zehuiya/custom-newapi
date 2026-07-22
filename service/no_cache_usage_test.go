@@ -16,16 +16,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func noCacheRelayInfo(channelName string, finalFormat types.RelayFormat) *relaycommon.RelayInfo {
+func noCacheRelayInfo(channelName string, noCacheEnabled bool, finalFormat types.RelayFormat) *relaycommon.RelayInfo {
 	return &relaycommon.RelayInfo{
 		FinalRequestRelayFormat: finalFormat,
 		ChannelMeta: &relaycommon.ChannelMeta{
-			ChannelName: channelName,
+			ChannelName:    channelName,
+			ChannelSetting: dto.ChannelSettings{NoCacheEnabled: noCacheEnabled},
 		},
 	}
 }
 
-func TestNormalizeNoCacheUsageForRelayOpenAIAddsCacheReadToInput(t *testing.T) {
+func TestNormalizeNoCacheUsageForRelayPlainNameWithSettingAddsCacheReadToInput(t *testing.T) {
 	usage := &dto.Usage{
 		PromptTokens:         130,
 		InputTokens:          130,
@@ -40,7 +41,7 @@ func TestNormalizeNoCacheUsageForRelayOpenAIAddsCacheReadToInput(t *testing.T) {
 		},
 	}
 
-	changed := NormalizeNoCacheUsageForRelay(nil, noCacheRelayInfo("openai-[no_cache]", types.RelayFormatOpenAI), usage)
+	changed := NormalizeNoCacheUsageForRelay(nil, noCacheRelayInfo("openai", true, types.RelayFormatOpenAI), usage)
 
 	require.True(t, changed)
 	require.Equal(t, 160, usage.PromptTokens)
@@ -66,7 +67,7 @@ func TestNormalizeNoCacheUsageForRelayClaudeAddsCacheReadToInput(t *testing.T) {
 		ClaudeCacheCreation1hTokens: 4,
 	}
 
-	changed := NormalizeNoCacheUsageForRelay(nil, noCacheRelayInfo("claude-[no_cache]", types.RelayFormatClaude), usage)
+	changed := NormalizeNoCacheUsageForRelay(nil, noCacheRelayInfo("claude", true, types.RelayFormatClaude), usage)
 
 	require.True(t, changed)
 	require.Equal(t, 130, usage.PromptTokens)
@@ -79,11 +80,11 @@ func TestNormalizeNoCacheUsageForRelayClaudeAddsCacheReadToInput(t *testing.T) {
 	require.Equal(t, 4, usage.ClaudeCacheCreation1hTokens)
 }
 
-func TestNormalizeNoCacheUsageForRelayUsesContextChannelName(t *testing.T) {
+func TestNormalizeNoCacheUsageForRelayUsesContextChannelSetting(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-	common.SetContextKey(ctx, constant.ContextKeyChannelName, "ctx-[no_cache]")
+	common.SetContextKey(ctx, constant.ContextKeyChannelSetting, dto.ChannelSettings{NoCacheEnabled: true})
 	usage := &dto.Usage{
 		PromptTokens:     10,
 		CompletionTokens: 2,
@@ -101,7 +102,7 @@ func TestNormalizeNoCacheUsageForRelayUsesContextChannelName(t *testing.T) {
 }
 
 func TestNormalizeNoCacheUsageForRelayIsIdempotent(t *testing.T) {
-	info := noCacheRelayInfo("claude-[no_cache]", types.RelayFormatClaude)
+	info := noCacheRelayInfo("claude", true, types.RelayFormatClaude)
 	usage := &dto.Usage{
 		PromptTokens:     100,
 		CompletionTokens: 20,
@@ -117,7 +118,7 @@ func TestNormalizeNoCacheUsageForRelayIsIdempotent(t *testing.T) {
 	require.Equal(t, 150, usage.TotalTokens)
 }
 
-func TestNormalizeNoCacheUsageForRelayKeepsUsageWithoutMarker(t *testing.T) {
+func TestNormalizeNoCacheUsageForRelayIgnoresLegacyNameMarkerWithoutSetting(t *testing.T) {
 	usage := &dto.Usage{
 		PromptTokens:     100,
 		CompletionTokens: 20,
@@ -127,7 +128,7 @@ func TestNormalizeNoCacheUsageForRelayKeepsUsageWithoutMarker(t *testing.T) {
 		},
 	}
 
-	changed := NormalizeNoCacheUsageForRelay(nil, noCacheRelayInfo("plain-cache-name", types.RelayFormatOpenAI), usage)
+	changed := NormalizeNoCacheUsageForRelay(nil, noCacheRelayInfo("openai-[no_cache]", false, types.RelayFormatOpenAI), usage)
 
 	require.False(t, changed)
 	require.Equal(t, 100, usage.PromptTokens)
@@ -145,7 +146,7 @@ func TestNormalizeNoCacheUsageForRelayUsesInputTokensDetailsFallback(t *testing.
 		},
 	}
 
-	changed := NormalizeNoCacheUsageForRelay(nil, noCacheRelayInfo("openai-[no_cache]", types.RelayFormatOpenAI), usage)
+	changed := NormalizeNoCacheUsageForRelay(nil, noCacheRelayInfo("openai", true, types.RelayFormatOpenAI), usage)
 
 	require.True(t, changed)
 	require.Equal(t, 160, usage.PromptTokens)
@@ -165,7 +166,7 @@ func TestNormalizeNoCacheUsageForRelayTieredParamsTreatCacheReadAsPrompt(t *test
 		},
 	}
 
-	require.True(t, NormalizeNoCacheUsageForRelay(nil, noCacheRelayInfo("claude-[no_cache]", types.RelayFormatClaude), usage))
+	require.True(t, NormalizeNoCacheUsageForRelay(nil, noCacheRelayInfo("claude", true, types.RelayFormatClaude), usage))
 	params := BuildTieredTokenParams(usage, true, usedVars)
 
 	require.Equal(t, 130.0, params.P)

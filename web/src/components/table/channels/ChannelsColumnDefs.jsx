@@ -253,26 +253,54 @@ const renderResponseTime = (responseTime, t) => {
   }
 };
 
-const isRequestPassThroughEnabled = (record) => {
+const parseChannelSettings = (record) => {
   if (!record || record.children !== undefined) {
-    return false;
+    return {};
   }
   const settingValue = record.setting;
   if (!settingValue) {
-    return false;
+    return {};
   }
   if (typeof settingValue === 'object') {
-    return settingValue.pass_through_body_enabled === true;
+    return settingValue;
   }
   if (typeof settingValue !== 'string') {
-    return false;
+    return {};
   }
   try {
     const parsed = JSON.parse(settingValue);
-    return parsed?.pass_through_body_enabled === true;
+    return parsed && typeof parsed === 'object' ? parsed : {};
   } catch (error) {
-    return false;
+    return {};
   }
+};
+
+const isRequestPassThroughEnabled = (record) =>
+  parseChannelSettings(record).pass_through_body_enabled === true;
+
+const getCacheUsageMeta = (record) => {
+  const settings = parseChannelSettings(record);
+  const noCacheEnabled = settings.no_cache_enabled === true;
+  const normalizePercentage = (value, fallback) => {
+    const parsed = Number(value ?? fallback);
+    return Number.isInteger(parsed) && parsed >= 0 && parsed <= 100
+      ? parsed
+      : fallback;
+  };
+
+  let percentageMin = normalizePercentage(settings.cache_percentage_min, 50);
+  let percentageMax = normalizePercentage(settings.cache_percentage_max, 90);
+  if (percentageMin > percentageMax) {
+    percentageMin = 50;
+    percentageMax = 90;
+  }
+
+  return {
+    cacheEnabled: settings.cache_enabled === true && !noCacheEnabled,
+    noCacheEnabled,
+    percentageMin,
+    percentageMax,
+  };
 };
 
 const getUpstreamUpdateMeta = (record) => {
@@ -340,6 +368,7 @@ export const getChannelsColumns = ({
       dataIndex: 'name',
       render: (text, record, index) => {
         const passThroughEnabled = isRequestPassThroughEnabled(record);
+        const cacheUsageMeta = getCacheUsageMeta(record);
         const upstreamUpdateMeta = getUpstreamUpdateMeta(record);
         const pendingAddCount = upstreamUpdateMeta.pendingAddModels.length;
         const pendingRemoveCount =
@@ -383,13 +412,45 @@ export const getChannelsColumns = ({
             <span>{text}</span>
           );
 
-        if (!passThroughEnabled && !showUpstreamUpdateTag) {
+        if (
+          !passThroughEnabled &&
+          !showUpstreamUpdateTag &&
+          !cacheUsageMeta.cacheEnabled &&
+          !cacheUsageMeta.noCacheEnabled
+        ) {
           return nameNode;
         }
 
         return (
-          <Space spacing={6} align='center'>
+          <Space spacing={6} align='center' wrap>
             {nameNode}
+            {cacheUsageMeta.cacheEnabled && (
+              <Tooltip
+                content={t(
+                  '上游未返回缓存用量且预估输入不少于 4096 tokens 时，按下方范围随机补充缓存读取量。',
+                )}
+                position='top'
+              >
+                <Tag color='cyan' type='light' size='small' shape='circle'>
+                  {t('缓存 {{min}}%-{{max}}%', {
+                    min: cacheUsageMeta.percentageMin,
+                    max: cacheUsageMeta.percentageMax,
+                  })}
+                </Tag>
+              </Tooltip>
+            )}
+            {cacheUsageMeta.noCacheEnabled && (
+              <Tooltip
+                content={t(
+                  '开启后，上游返回的缓存读取 tokens 将合并为普通输入 tokens，并按普通输入计费。',
+                )}
+                position='top'
+              >
+                <Tag color='orange' type='light' size='small' shape='circle'>
+                  {t('无缓存计费')}
+                </Tag>
+              </Tooltip>
+            )}
             {passThroughEnabled && (
               <Tooltip
                 content={t(

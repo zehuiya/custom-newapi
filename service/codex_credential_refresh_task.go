@@ -110,7 +110,14 @@ func runCodexCredentialAutoRefreshOnce() {
 			}
 
 			refreshCtx, cancel := context.WithTimeout(ctx, codexCredentialRefreshTimeout)
-			newKey, _, err := RefreshCodexChannelCredential(refreshCtx, ch.Id, CodexCredentialRefreshOptions{ResetCaches: false})
+			newKey, _, err := RefreshCodexChannelCredential(refreshCtx, ch.Id, CodexCredentialRefreshOptions{
+				ResetCaches: false,
+				AuditActor: model.ChannelAuditActor{
+					Type: model.ChannelAuditActorSystem,
+					Name: "system",
+				},
+				AuditSource: "channel_codex_credential_auto_refresh",
+			})
 			cancel()
 			if err != nil {
 				logger.LogWarn(ctx, fmt.Sprintf("codex credential auto-refresh: channel_id=%d name=%s refresh failed: %v", ch.Id, ch.Name, err))

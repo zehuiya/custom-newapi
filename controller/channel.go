@@ -502,7 +502,11 @@ func RefreshCodexChannelCredential(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 
-	oauthKey, ch, err := service.RefreshCodexChannelCredential(ctx, channelId, service.CodexCredentialRefreshOptions{ResetCaches: true})
+	oauthKey, ch, err := service.RefreshCodexChannelCredential(ctx, channelId, service.CodexCredentialRefreshOptions{
+		ResetCaches: true,
+		AuditActor:  NewChannelAuditActor(c),
+		AuditSource: "channel_codex_credential_refresh",
+	})
 	if err != nil {
 		common.SysError("failed to refresh codex channel credential: " + err.Error())
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "刷新凭证失败，请稍后重试"})
@@ -650,7 +654,7 @@ func AddChannel(c *gin.Context) {
 		}
 		channels = append(channels, *localChannel)
 	}
-	err = model.BatchInsertChannels(channels)
+	err = model.BatchInsertChannelsWithAudit(channels, NewChannelAuditActor(c), "channel_create", common.GetUUID())
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -666,7 +670,7 @@ func AddChannel(c *gin.Context) {
 func DeleteChannel(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
 	channel := model.Channel{Id: id}
-	err := channel.Delete()
+	err := channel.DeleteWithAudit(NewChannelAuditActor(c), "channel_delete", "")
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -680,7 +684,7 @@ func DeleteChannel(c *gin.Context) {
 }
 
 func DeleteDisabledChannel(c *gin.Context) {
-	rows, err := model.DeleteDisabledChannel()
+	rows, err := model.DeleteDisabledChannelWithAudit(NewChannelAuditActor(c), "channel_delete_disabled", common.GetUUID())
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -716,7 +720,7 @@ func DisableTagChannels(c *gin.Context) {
 		})
 		return
 	}
-	err = model.DisableChannelByTag(channelTag.Tag)
+	err = model.UpdateChannelStatusByTagWithAudit(channelTag.Tag, common.ChannelStatusManuallyDisabled, NewChannelAuditActor(c), "channel_tag_disable", common.GetUUID())
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -739,7 +743,7 @@ func EnableTagChannels(c *gin.Context) {
 		})
 		return
 	}
-	err = model.EnableChannelByTag(channelTag.Tag)
+	err = model.UpdateChannelStatusByTagWithAudit(channelTag.Tag, common.ChannelStatusEnabled, NewChannelAuditActor(c), "channel_tag_enable", common.GetUUID())
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -791,7 +795,7 @@ func EditTagChannels(c *gin.Context) {
 		}
 		channelTag.HeaderOverride = common.GetPointer[string](trimmed)
 	}
-	err = model.EditChannelByTag(channelTag.Tag, channelTag.NewTag, channelTag.ModelMapping, channelTag.Models, channelTag.Groups, channelTag.Priority, channelTag.Weight, channelTag.ParamOverride, channelTag.HeaderOverride)
+	err = model.EditChannelByTagWithAudit(channelTag.Tag, channelTag.NewTag, channelTag.ModelMapping, channelTag.Models, channelTag.Groups, channelTag.Priority, channelTag.Weight, channelTag.ParamOverride, channelTag.HeaderOverride, NewChannelAuditActor(c), "channel_tag_edit", common.GetUUID())
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -819,7 +823,7 @@ func DeleteChannelBatch(c *gin.Context) {
 		})
 		return
 	}
-	err = model.BatchDeleteChannels(channelBatch.Ids)
+	err = model.BatchDeleteChannelsWithAudit(channelBatch.Ids, NewChannelAuditActor(c), "channel_batch_delete", common.GetUUID())
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -953,7 +957,7 @@ func UpdateChannel(c *gin.Context) {
 			// 覆盖模式：直接使用新密钥（默认行为，不需要特殊处理）
 		}
 	}
-	err = channel.Update()
+	err = channel.UpdateWithAudit(NewChannelAuditActor(c), "channel_update", "")
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -1100,7 +1104,7 @@ func BatchSetChannelTag(c *gin.Context) {
 		})
 		return
 	}
-	err = model.BatchSetChannelTag(channelBatch.Ids, channelBatch.Tag)
+	err = model.BatchSetChannelTagWithAudit(channelBatch.Ids, channelBatch.Tag, NewChannelAuditActor(c), "channel_batch_set_tag", common.GetUUID())
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -1197,11 +1201,13 @@ func CopyChannel(c *gin.Context) {
 	}
 
 	// insert
-	if err := model.BatchInsertChannels([]model.Channel{clone}); err != nil {
+	clones := []model.Channel{clone}
+	if err := model.BatchInsertChannelsWithAudit(clones, NewChannelAuditActor(c), "channel_copy", ""); err != nil {
 		common.SysError("failed to clone channel: " + err.Error())
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "复制渠道失败，请稍后重试"})
 		return
 	}
+	clone = clones[0]
 	model.InitChannelCache()
 	// success
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": gin.H{"id": clone.Id}})
@@ -1267,6 +1273,7 @@ func ManageMultiKeys(c *gin.Context) {
 	lock := model.GetChannelPollingLock(channel.Id)
 	lock.Lock()
 	defer lock.Unlock()
+	auditSource := "channel_multi_key_" + request.Action
 
 	switch request.Action {
 	case "get_key_status":
@@ -1413,7 +1420,7 @@ func ManageMultiKeys(c *gin.Context) {
 
 		channel.ChannelInfo.MultiKeyStatusList[keyIndex] = 2 // disabled
 
-		err = channel.Update()
+		err = channel.UpdateWithAuditAction(NewChannelAuditActor(c), auditSource, "", model.ChannelAuditActionKeyManage)
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -1455,7 +1462,7 @@ func ManageMultiKeys(c *gin.Context) {
 			delete(channel.ChannelInfo.MultiKeyDisabledReason, keyIndex)
 		}
 
-		err = channel.Update()
+		err = channel.UpdateWithAuditAction(NewChannelAuditActor(c), auditSource, "", model.ChannelAuditActionKeyManage)
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -1479,7 +1486,7 @@ func ManageMultiKeys(c *gin.Context) {
 		channel.ChannelInfo.MultiKeyDisabledTime = make(map[int]int64)
 		channel.ChannelInfo.MultiKeyDisabledReason = make(map[int]string)
 
-		err = channel.Update()
+		err = channel.UpdateWithAuditAction(NewChannelAuditActor(c), auditSource, "", model.ChannelAuditActionKeyManage)
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -1526,7 +1533,7 @@ func ManageMultiKeys(c *gin.Context) {
 			return
 		}
 
-		err = channel.Update()
+		err = channel.UpdateWithAuditAction(NewChannelAuditActor(c), auditSource, "", model.ChannelAuditActionKeyManage)
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -1606,7 +1613,7 @@ func ManageMultiKeys(c *gin.Context) {
 		channel.ChannelInfo.MultiKeyDisabledTime = newDisabledTime
 		channel.ChannelInfo.MultiKeyDisabledReason = newDisabledReason
 
-		err = channel.Update()
+		err = channel.UpdateWithAuditAction(NewChannelAuditActor(c), auditSource, "", model.ChannelAuditActionKeyManage)
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -1674,7 +1681,7 @@ func ManageMultiKeys(c *gin.Context) {
 		channel.ChannelInfo.MultiKeyDisabledTime = newDisabledTime
 		channel.ChannelInfo.MultiKeyDisabledReason = newDisabledReason
 
-		err = channel.Update()
+		err = channel.UpdateWithAuditAction(NewChannelAuditActor(c), auditSource, "", model.ChannelAuditActionKeyManage)
 		if err != nil {
 			common.ApiError(c, err)
 			return

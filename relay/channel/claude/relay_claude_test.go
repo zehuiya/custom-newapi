@@ -419,7 +419,8 @@ func TestHandleClaudeResponseDataNoCacheNormalizesNativeUsage(t *testing.T) {
 	info := &relaycommon.RelayInfo{
 		RelayFormat: types.RelayFormatClaude,
 		ChannelMeta: &relaycommon.ChannelMeta{
-			ChannelName: "claude-[no_cache]",
+			ChannelName:    "claude",
+			ChannelSetting: dto.ChannelSettings{NoCacheEnabled: true},
 		},
 	}
 	claudeInfo := &ClaudeResponseInfo{Usage: &dto.Usage{}}
@@ -509,7 +510,8 @@ func TestHandleStreamResponseDataNoCacheNormalizesMessageDeltaUsage(t *testing.T
 	info := &relaycommon.RelayInfo{
 		RelayFormat: types.RelayFormatClaude,
 		ChannelMeta: &relaycommon.ChannelMeta{
-			ChannelName: "claude-[no_cache]",
+			ChannelName:    "claude",
+			ChannelSetting: dto.ChannelSettings{NoCacheEnabled: true},
 		},
 	}
 	claudeInfo := &ClaudeResponseInfo{Usage: &dto.Usage{}}
@@ -534,7 +536,8 @@ func TestHandleStreamResponseDataNoCacheNormalizesMessageStartUsage(t *testing.T
 	info := &relaycommon.RelayInfo{
 		RelayFormat: types.RelayFormatClaude,
 		ChannelMeta: &relaycommon.ChannelMeta{
-			ChannelName: "claude-[no_cache]",
+			ChannelName:    "claude",
+			ChannelSetting: dto.ChannelSettings{NoCacheEnabled: true},
 		},
 	}
 	claudeInfo := &ClaudeResponseInfo{Usage: &dto.Usage{}}
@@ -570,7 +573,8 @@ func TestHandleStreamFinalResponseNoCacheNormalizesOpenAIUsageChunk(t *testing.T
 		RelayFormat:        types.RelayFormatOpenAI,
 		ShouldIncludeUsage: true,
 		ChannelMeta: &relaycommon.ChannelMeta{
-			ChannelName:       "claude-[no_cache]",
+			ChannelName:       "claude",
+			ChannelSetting:    dto.ChannelSettings{NoCacheEnabled: true},
 			UpstreamModelName: "claude-test",
 		},
 	}

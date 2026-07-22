@@ -16,6 +16,7 @@ import (
 
 	"github.com/samber/lo"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type Channel struct {
@@ -193,7 +194,36 @@ func (channel *Channel) GetNextEnabledKey() (string, int, *types.NewAPIError) {
 }
 
 func (channel *Channel) SaveChannelInfo() error {
-	return DB.Model(channel).Update("channel_info", channel.ChannelInfo).Error
+	tx := DB.Begin()
+	if tx.Error != nil {
+		return tx.Error
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+			panic(r)
+		}
+	}()
+
+	query := WithChannelMutationLock(tx).Select("id", "channel_info")
+	persisted := &Channel{}
+	if err := query.First(persisted, "id = ?", channel.Id).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	// Polling position is runtime state. Re-read the current JSON value and
+	// replace only that position so a stale relay object cannot overwrite a
+	// concurrently updated multi-key mode or key status configuration.
+	persisted.ChannelInfo.MultiKeyPollingIndex = channel.ChannelInfo.MultiKeyPollingIndex
+	if err := tx.Model(&Channel{}).Where("id = ?", channel.Id).Update("channel_info", persisted.ChannelInfo).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	if err := tx.Commit().Error; err != nil {
+		return err
+	}
+	channel.ChannelInfo = persisted.ChannelInfo
+	return nil
 }
 
 func (channel *Channel) GetModels() []string {
@@ -253,20 +283,117 @@ func (channel *Channel) GetAutoBan() bool {
 }
 
 func (channel *Channel) Save() error {
-	if err := channel.ValidateSettings(); err != nil {
-		return err
-	}
-	return DB.Save(channel).Error
+	return channel.SaveWithAudit(systemChannelAuditActor(), "channel_save_internal", "")
 }
 
-func (channel *Channel) SaveWithoutKey() error {
+func (channel *Channel) SaveWithAudit(actor ChannelAuditActor, source string, batchID string) error {
+	return channel.saveWithAudit(actor, source, batchID, ChannelAuditActionUpdate)
+}
+
+func (channel *Channel) saveWithAudit(actor ChannelAuditActor, source string, batchID string, action string) error {
 	if channel.Id == 0 {
 		return errors.New("channel ID is 0")
 	}
 	if err := channel.ValidateSettings(); err != nil {
 		return err
 	}
-	return DB.Omit("key").Save(channel).Error
+	tx := DB.Begin()
+	if tx.Error != nil {
+		return tx.Error
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+			panic(r)
+		}
+	}()
+	before := &Channel{}
+	if err := WithChannelMutationLock(tx).First(before, "id = ?", channel.Id).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	if err := tx.Save(channel).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	after := &Channel{}
+	if err := tx.First(after, "id = ?", channel.Id).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	if err := RecordChannelAuditPairs(tx, actor, source, batchID, []ChannelAuditPair{{Before: before, After: after, Action: action}}); err != nil {
+		tx.Rollback()
+		return err
+	}
+	if err := tx.Commit().Error; err != nil {
+		return err
+	}
+	*channel = *after
+	return nil
+}
+
+func (channel *Channel) SaveWithoutKey() error {
+	return channel.SaveWithoutKeyWithAudit(systemChannelAuditActor(), "channel_save_internal", "")
+}
+
+func systemChannelAuditActor() ChannelAuditActor {
+	return ChannelAuditActor{Type: ChannelAuditActorSystem, Name: "system"}
+}
+
+// WithChannelMutationLock serializes before/after snapshots with the actual
+// row mutation on databases that support SELECT ... FOR UPDATE. SQLite has no
+// row-level locking and already serializes writers at the database level.
+func WithChannelMutationLock(tx *gorm.DB) *gorm.DB {
+	if tx == nil || common.UsingSQLite {
+		return tx
+	}
+	return tx.Clauses(clause.Locking{Strength: "UPDATE"})
+}
+
+func (channel *Channel) SaveWithoutKeyWithAudit(actor ChannelAuditActor, source string, batchID string) error {
+	return channel.saveWithoutKeyWithAudit(actor, source, batchID, ChannelAuditActionUpdate)
+}
+
+func (channel *Channel) saveWithoutKeyWithAudit(actor ChannelAuditActor, source string, batchID string, action string) error {
+	if channel.Id == 0 {
+		return errors.New("channel ID is 0")
+	}
+	if err := channel.ValidateSettings(); err != nil {
+		return err
+	}
+	tx := DB.Begin()
+	if tx.Error != nil {
+		return tx.Error
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+			panic(r)
+		}
+	}()
+	before := &Channel{}
+	if err := WithChannelMutationLock(tx).First(before, "id = ?", channel.Id).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	if err := tx.Omit("key").Save(channel).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	after := &Channel{}
+	if err := tx.First(after, "id = ?", channel.Id).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	if err := RecordChannelAuditPairs(tx, actor, source, batchID, []ChannelAuditPair{{Before: before, After: after, Action: action}}); err != nil {
+		tx.Rollback()
+		return err
+	}
+	if err := tx.Commit().Error; err != nil {
+		return err
+	}
+	*channel = *after
+	return nil
 }
 
 func GetAllChannels(startIdx int, num int, selectAll bool, idSort bool) ([]*Channel, error) {
@@ -365,6 +492,14 @@ func GetChannelById(id int, selectAll bool) (*Channel, error) {
 }
 
 func BatchInsertChannels(channels []Channel) error {
+	return batchInsertChannels(channels, true, systemChannelAuditActor(), "channel_create_internal", common.GetUUID())
+}
+
+func BatchInsertChannelsWithAudit(channels []Channel, actor ChannelAuditActor, source string, batchID string) error {
+	return batchInsertChannels(channels, true, actor, source, batchID)
+}
+
+func batchInsertChannels(channels []Channel, audit bool, actor ChannelAuditActor, source string, batchID string) error {
 	if len(channels) == 0 {
 		return nil
 	}
@@ -380,10 +515,13 @@ func BatchInsertChannels(channels []Channel) error {
 	defer func() {
 		if r := recover(); r != nil {
 			tx.Rollback()
+			panic(r)
 		}
 	}()
 
-	for _, chunk := range lo.Chunk(channels, 50) {
+	for start := 0; start < len(channels); start += 50 {
+		end := min(start+50, len(channels))
+		chunk := channels[start:end]
 		if err := tx.Create(&chunk).Error; err != nil {
 			tx.Rollback()
 			return err
@@ -395,10 +533,37 @@ func BatchInsertChannels(channels []Channel) error {
 			}
 		}
 	}
+	if audit {
+		ids := make([]int, 0, len(channels))
+		for i := range channels {
+			ids = append(ids, channels[i].Id)
+		}
+		var afterChannels []Channel
+		if err := tx.Where("id in (?)", ids).Find(&afterChannels).Error; err != nil {
+			tx.Rollback()
+			return err
+		}
+		pairs := make([]ChannelAuditPair, 0, len(afterChannels))
+		for i := range afterChannels {
+			pairs = append(pairs, ChannelAuditPair{After: &afterChannels[i]})
+		}
+		if err := RecordChannelAuditPairs(tx, actor, source, batchID, pairs); err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
 	return tx.Commit().Error
 }
 
 func BatchDeleteChannels(ids []int) error {
+	return batchDeleteChannels(ids, true, systemChannelAuditActor(), "channel_delete_internal", common.GetUUID())
+}
+
+func BatchDeleteChannelsWithAudit(ids []int, actor ChannelAuditActor, source string, batchID string) error {
+	return batchDeleteChannels(ids, true, actor, source, batchID)
+}
+
+func batchDeleteChannels(ids []int, audit bool, actor ChannelAuditActor, source string, batchID string) error {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -407,12 +572,29 @@ func BatchDeleteChannels(ids []int) error {
 	if tx.Error != nil {
 		return tx.Error
 	}
+	var beforeChannels []Channel
+	if audit {
+		if err := WithChannelMutationLock(tx).Where("id in (?)", ids).Order("id asc").Find(&beforeChannels).Error; err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
 	for _, chunk := range lo.Chunk(ids, 200) {
 		if err := tx.Where("id in (?)", chunk).Delete(&Channel{}).Error; err != nil {
 			tx.Rollback()
 			return err
 		}
 		if err := tx.Where("channel_id in (?)", chunk).Delete(&Ability{}).Error; err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+	if audit {
+		pairs := make([]ChannelAuditPair, 0, len(beforeChannels))
+		for i := range beforeChannels {
+			pairs = append(pairs, ChannelAuditPair{Before: &beforeChannels[i]})
+		}
+		if err := RecordChannelAuditPairs(tx, actor, source, batchID, pairs); err != nil {
 			tx.Rollback()
 			return err
 		}
@@ -488,19 +670,63 @@ func (channel *Channel) GetStatusCodeMapping() string {
 }
 
 func (channel *Channel) Insert() error {
-	if err := channel.ValidateSettings(); err != nil {
+	channels := []Channel{*channel}
+	if err := BatchInsertChannels(channels); err != nil {
 		return err
 	}
-	var err error
-	err = DB.Create(channel).Error
-	if err != nil {
-		return err
-	}
-	err = channel.AddAbilities(nil)
-	return err
+	*channel = channels[0]
+	return nil
 }
 
 func (channel *Channel) Update() error {
+	return channel.UpdateWithAudit(systemChannelAuditActor(), "channel_update_internal", "")
+}
+
+func (channel *Channel) UpdateWithAudit(actor ChannelAuditActor, source string, batchID string) error {
+	return channel.UpdateWithAuditAction(actor, source, batchID, ChannelAuditActionUpdate)
+}
+
+func (channel *Channel) UpdateWithAuditAction(actor ChannelAuditActor, source string, batchID string, action string) error {
+	tx := DB.Begin()
+	if tx.Error != nil {
+		return tx.Error
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+			panic(r)
+		}
+	}()
+
+	before := &Channel{}
+	if err := WithChannelMutationLock(tx).First(before, "id = ?", channel.Id).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	if err := channel.updateWithDB(tx, tx); err != nil {
+		tx.Rollback()
+		return err
+	}
+	after := &Channel{}
+	if err := tx.First(after, "id = ?", channel.Id).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	if err := RecordChannelAuditPairs(tx, actor, source, batchID, []ChannelAuditPair{{Before: before, After: after, Action: action}}); err != nil {
+		tx.Rollback()
+		return err
+	}
+	if err := tx.Commit().Error; err != nil {
+		return err
+	}
+	*channel = *after
+	return nil
+}
+
+// updateWithDB persists a channel using the supplied database handle. When
+// abilityTx is non-nil, derived abilities are updated in the same transaction
+// as the channel row (used by audited configuration mutations).
+func (channel *Channel) updateWithDB(useDB *gorm.DB, abilityTx *gorm.DB) error {
 	if err := channel.ValidateSettings(); err != nil {
 		return err
 	}
@@ -511,7 +737,8 @@ func (channel *Channel) Update() error {
 			keyStr = channel.Key
 		} else {
 			// If key is not provided, read the existing key from the database
-			if existing, err := GetChannelById(channel.Id, true); err == nil {
+			existing := Channel{}
+			if err := useDB.First(&existing, "id = ?", channel.Id).Error; err == nil {
 				keyStr = existing.Key
 			}
 		}
@@ -543,12 +770,14 @@ func (channel *Channel) Update() error {
 		}
 	}
 	var err error
-	err = DB.Model(channel).Updates(channel).Error
+	err = useDB.Model(channel).Updates(channel).Error
 	if err != nil {
 		return err
 	}
-	DB.Model(channel).First(channel, "id = ?", channel.Id)
-	err = channel.UpdateAbilities(nil)
+	if err = useDB.Model(channel).First(channel, "id = ?", channel.Id).Error; err != nil {
+		return err
+	}
+	err = channel.UpdateAbilities(abilityTx)
 	return err
 }
 
@@ -573,13 +802,39 @@ func (channel *Channel) UpdateBalance(balance float64) {
 }
 
 func (channel *Channel) Delete() error {
-	var err error
-	err = DB.Delete(channel).Error
-	if err != nil {
+	return channel.DeleteWithAudit(systemChannelAuditActor(), "channel_delete_internal", "")
+}
+
+func (channel *Channel) DeleteWithAudit(actor ChannelAuditActor, source string, batchID string) error {
+	tx := DB.Begin()
+	if tx.Error != nil {
+		return tx.Error
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+			panic(r)
+		}
+	}()
+
+	before := &Channel{}
+	if err := WithChannelMutationLock(tx).First(before, "id = ?", channel.Id).Error; err != nil {
+		tx.Rollback()
 		return err
 	}
-	err = channel.DeleteAbilities()
-	return err
+	if err := tx.Delete(&Channel{}, "id = ?", channel.Id).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	if err := tx.Where("channel_id = ?", channel.Id).Delete(&Ability{}).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	if err := RecordChannelAuditPairs(tx, actor, source, batchID, []ChannelAuditPair{{Before: before}}); err != nil {
+		tx.Rollback()
+		return err
+	}
+	return tx.Commit().Error
 }
 
 var channelStatusLock sync.Mutex
@@ -718,7 +973,7 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 			channel.Status = status
 			shouldUpdateAbilities = true
 		}
-		err = channel.SaveWithoutKey()
+		err = channel.saveWithoutKeyWithAudit(systemChannelAuditActor(), "automatic_status", "", ChannelAuditActionStatusChange)
 		if err != nil {
 			common.SysLog(fmt.Sprintf("failed to update channel status: channel_id=%d, status=%d, error=%v", channel.Id, status, err))
 			return false
@@ -728,31 +983,109 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 }
 
 func EnableChannelByTag(tag string) error {
-	err := DB.Model(&Channel{}).Where("tag = ?", tag).Update("status", common.ChannelStatusEnabled).Error
-	if err != nil {
-		return err
-	}
-	err = UpdateAbilityStatusByTag(tag, true)
-	return err
+	return UpdateChannelStatusByTagWithAudit(tag, common.ChannelStatusEnabled, systemChannelAuditActor(), "channel_tag_enable_internal", common.GetUUID())
 }
 
 func DisableChannelByTag(tag string) error {
-	err := DB.Model(&Channel{}).Where("tag = ?", tag).Update("status", common.ChannelStatusManuallyDisabled).Error
-	if err != nil {
+	return UpdateChannelStatusByTagWithAudit(tag, common.ChannelStatusManuallyDisabled, systemChannelAuditActor(), "channel_tag_disable_internal", common.GetUUID())
+}
+
+func UpdateChannelStatusByTagWithAudit(tag string, status int, actor ChannelAuditActor, source string, batchID string) error {
+	tx := DB.Begin()
+	if tx.Error != nil {
+		return tx.Error
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+			panic(r)
+		}
+	}()
+
+	var beforeChannels []Channel
+	if err := WithChannelMutationLock(tx).Where("tag = ?", tag).Order("id asc").Find(&beforeChannels).Error; err != nil {
+		tx.Rollback()
 		return err
 	}
-	err = UpdateAbilityStatusByTag(tag, false)
-	return err
+	if len(beforeChannels) == 0 {
+		return tx.Commit().Error
+	}
+	ids := make([]int, 0, len(beforeChannels))
+	for i := range beforeChannels {
+		ids = append(ids, beforeChannels[i].Id)
+	}
+	if err := tx.Model(&Channel{}).Where("id in (?)", ids).Update("status", status).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	if err := tx.Model(&Ability{}).Where("channel_id in (?)", ids).Select("enabled").Update("enabled", status == common.ChannelStatusEnabled).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	var afterChannels []Channel
+	if err := tx.Where("id in (?)", ids).Find(&afterChannels).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	pairs := pairChannelAuditSnapshots(beforeChannels, afterChannels)
+	for i := range pairs {
+		pairs[i].Action = ChannelAuditActionStatusChange
+	}
+	if err := RecordChannelAuditPairs(tx, actor, source, batchID, pairs); err != nil {
+		tx.Rollback()
+		return err
+	}
+	return tx.Commit().Error
+}
+
+func pairChannelAuditSnapshots(beforeChannels []Channel, afterChannels []Channel) []ChannelAuditPair {
+	afterByID := make(map[int]*Channel, len(afterChannels))
+	for i := range afterChannels {
+		afterByID[afterChannels[i].Id] = &afterChannels[i]
+	}
+	pairs := make([]ChannelAuditPair, 0, len(beforeChannels))
+	for i := range beforeChannels {
+		pairs = append(pairs, ChannelAuditPair{
+			Before: &beforeChannels[i],
+			After:  afterByID[beforeChannels[i].Id],
+		})
+	}
+	return pairs
 }
 
 func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *string, group *string, priority *int64, weight *uint, paramOverride *string, headerOverride *string) error {
+	return EditChannelByTagWithAudit(tag, newTag, modelMapping, models, group, priority, weight, paramOverride, headerOverride, systemChannelAuditActor(), "channel_tag_edit_internal", common.GetUUID())
+}
+
+func EditChannelByTagWithAudit(tag string, newTag *string, modelMapping *string, models *string, group *string, priority *int64, weight *uint, paramOverride *string, headerOverride *string, actor ChannelAuditActor, source string, batchID string) error {
+	tx := DB.Begin()
+	if tx.Error != nil {
+		return tx.Error
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+			panic(r)
+		}
+	}()
+
+	var beforeChannels []Channel
+	if err := WithChannelMutationLock(tx).Where("tag = ?", tag).Order("id asc").Find(&beforeChannels).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	if len(beforeChannels) == 0 {
+		return tx.Commit().Error
+	}
+	ids := make([]int, 0, len(beforeChannels))
+	for i := range beforeChannels {
+		ids = append(ids, beforeChannels[i].Id)
+	}
+
 	updateData := Channel{}
 	shouldReCreateAbilities := false
-	updatedTag := tag
-	// 如果 newTag 不为空且不等于 tag，则更新 tag
 	if newTag != nil && *newTag != tag {
 		updateData.Tag = newTag
-		updatedTag = *newTag
 	}
 	if modelMapping != nil && *modelMapping != "" {
 		updateData.ModelMapping = modelMapping
@@ -777,28 +1110,48 @@ func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *
 	if headerOverride != nil {
 		updateData.HeaderOverride = headerOverride
 	}
+	if err := tx.Model(&Channel{}).Where("id in (?)", ids).Updates(updateData).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
 
-	err := DB.Model(&Channel{}).Where("tag = ?", tag).Updates(updateData).Error
-	if err != nil {
+	var afterChannels []Channel
+	if err := tx.Where("id in (?)", ids).Find(&afterChannels).Error; err != nil {
+		tx.Rollback()
 		return err
 	}
 	if shouldReCreateAbilities {
-		channels, err := GetChannelsByTag(updatedTag, false, false)
-		if err == nil {
-			for _, channel := range channels {
-				err = channel.UpdateAbilities(nil)
-				if err != nil {
-					common.SysLog(fmt.Sprintf("failed to update abilities: channel_id=%d, tag=%s, error=%v", channel.Id, channel.GetTag(), err))
-				}
+		for i := range afterChannels {
+			if err := afterChannels[i].UpdateAbilities(tx); err != nil {
+				tx.Rollback()
+				return err
 			}
 		}
 	} else {
-		err := UpdateAbilityByTag(tag, newTag, priority, weight)
-		if err != nil {
+		ability := Ability{}
+		if newTag != nil {
+			ability.Tag = newTag
+		}
+		if priority != nil {
+			ability.Priority = priority
+		}
+		if weight != nil {
+			ability.Weight = *weight
+		}
+		if err := tx.Model(&Ability{}).Where("channel_id in (?)", ids).Updates(ability).Error; err != nil {
+			tx.Rollback()
 			return err
 		}
 	}
-	return nil
+	pairs := pairChannelAuditSnapshots(beforeChannels, afterChannels)
+	for i := range pairs {
+		pairs[i].Action = ChannelAuditActionTagUpdate
+	}
+	if err := RecordChannelAuditPairs(tx, actor, source, batchID, pairs); err != nil {
+		tx.Rollback()
+		return err
+	}
+	return tx.Commit().Error
 }
 
 func UpdateChannelUsedQuota(id int, quota int) {
@@ -817,13 +1170,74 @@ func updateChannelUsedQuota(id int, quota int) {
 }
 
 func DeleteChannelByStatus(status int64) (int64, error) {
-	result := DB.Where("status = ?", status).Delete(&Channel{})
-	return result.RowsAffected, result.Error
+	return deleteChannelsByStatusWithAudit(
+		[]int64{status},
+		systemChannelAuditActor(),
+		"channel_delete_by_status_internal",
+		common.GetUUID(),
+	)
 }
 
 func DeleteDisabledChannel() (int64, error) {
-	result := DB.Where("status = ? or status = ?", common.ChannelStatusAutoDisabled, common.ChannelStatusManuallyDisabled).Delete(&Channel{})
-	return result.RowsAffected, result.Error
+	return DeleteDisabledChannelWithAudit(systemChannelAuditActor(), "channel_delete_disabled_internal", common.GetUUID())
+}
+
+func DeleteDisabledChannelWithAudit(actor ChannelAuditActor, source string, batchID string) (int64, error) {
+	return deleteChannelsByStatusWithAudit(
+		[]int64{common.ChannelStatusAutoDisabled, common.ChannelStatusManuallyDisabled},
+		actor,
+		source,
+		batchID,
+	)
+}
+
+func deleteChannelsByStatusWithAudit(statuses []int64, actor ChannelAuditActor, source string, batchID string) (int64, error) {
+	tx := DB.Begin()
+	if tx.Error != nil {
+		return 0, tx.Error
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+			panic(r)
+		}
+	}()
+
+	var beforeChannels []Channel
+	if err := WithChannelMutationLock(tx).Where("status in (?)", statuses).Order("id asc").Find(&beforeChannels).Error; err != nil {
+		tx.Rollback()
+		return 0, err
+	}
+	if len(beforeChannels) == 0 {
+		if err := tx.Commit().Error; err != nil {
+			return 0, err
+		}
+		return 0, nil
+	}
+
+	ids := make([]int, 0, len(beforeChannels))
+	pairs := make([]ChannelAuditPair, 0, len(beforeChannels))
+	for i := range beforeChannels {
+		ids = append(ids, beforeChannels[i].Id)
+		pairs = append(pairs, ChannelAuditPair{Before: &beforeChannels[i]})
+	}
+	result := tx.Where("id in (?)", ids).Delete(&Channel{})
+	if result.Error != nil {
+		tx.Rollback()
+		return 0, result.Error
+	}
+	if err := tx.Where("channel_id in (?)", ids).Delete(&Ability{}).Error; err != nil {
+		tx.Rollback()
+		return 0, err
+	}
+	if err := RecordChannelAuditPairs(tx, actor, source, batchID, pairs); err != nil {
+		tx.Rollback()
+		return 0, err
+	}
+	if err := tx.Commit().Error; err != nil {
+		return 0, err
+	}
+	return result.RowsAffected, nil
 }
 
 func GetPaginatedTags(offset int, limit int) ([]*string, error) {
@@ -896,6 +1310,21 @@ func (channel *Channel) ValidateSettings() error {
 		if err := common.Unmarshal(settingBytes, channelParams); err != nil {
 			return err
 		}
+		if channelParams.CacheEnabled && channelParams.NoCacheEnabled {
+			return errors.New("cache_enabled and no_cache_enabled cannot both be enabled")
+		}
+		if channelParams.CacheEnabled || channelParams.CachePercentageMin != nil || channelParams.CachePercentageMax != nil {
+			minPercentage, maxPercentage := channelParams.GetCachePercentageRange()
+			if minPercentage < 0 || minPercentage > 100 {
+				return fmt.Errorf("cache_percentage_min must be between 0 and 100, got %d", minPercentage)
+			}
+			if maxPercentage < 0 || maxPercentage > 100 {
+				return fmt.Errorf("cache_percentage_max must be between 0 and 100, got %d", maxPercentage)
+			}
+			if minPercentage > maxPercentage {
+				return fmt.Errorf("cache_percentage_min must not exceed cache_percentage_max: %d > %d", minPercentage, maxPercentage)
+			}
+		}
 
 		// thinking_to_content has been retired. Strip it from every write path so
 		// legacy clients cannot persist or reactivate the old conversion behavior.
@@ -923,7 +1352,7 @@ func (channel *Channel) GetSetting() dto.ChannelSettings {
 		if err != nil {
 			common.SysLog(fmt.Sprintf("failed to unmarshal setting: channel_id=%d, error=%v", channel.Id, err))
 			channel.Setting = nil // 清空设置以避免后续错误
-			_ = channel.Save()    // 保存修改
+			_ = channel.saveWithAudit(systemChannelAuditActor(), "channel_setting_repair", "", ChannelAuditActionSystemRepair)
 		}
 	}
 	return setting
@@ -945,7 +1374,7 @@ func (channel *Channel) GetOtherSettings() dto.ChannelOtherSettings {
 		if err != nil {
 			common.SysLog(fmt.Sprintf("failed to unmarshal setting: channel_id=%d, error=%v", channel.Id, err))
 			channel.OtherSettings = "{}" // 清空设置以避免后续错误
-			_ = channel.Save()           // 保存修改
+			_ = channel.saveWithAudit(systemChannelAuditActor(), "channel_other_settings_repair", "", ChannelAuditActionSystemRepair)
 		}
 	}
 	return setting
@@ -989,35 +1418,52 @@ func GetChannelsByIds(ids []int) ([]*Channel, error) {
 }
 
 func BatchSetChannelTag(ids []int, tag *string) error {
-	// 开启事务
+	return BatchSetChannelTagWithAudit(ids, tag, systemChannelAuditActor(), "channel_batch_set_tag_internal", common.GetUUID())
+}
+
+func BatchSetChannelTagWithAudit(ids []int, tag *string, actor ChannelAuditActor, source string, batchID string) error {
+	if len(ids) == 0 {
+		return nil
+	}
 	tx := DB.Begin()
 	if tx.Error != nil {
 		return tx.Error
 	}
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+			panic(r)
+		}
+	}()
 
-	// 更新标签
-	err := tx.Model(&Channel{}).Where("id in (?)", ids).Update("tag", tag).Error
-	if err != nil {
+	var beforeChannels []Channel
+	if err := WithChannelMutationLock(tx).Where("id in (?)", ids).Order("id asc").Find(&beforeChannels).Error; err != nil {
 		tx.Rollback()
 		return err
 	}
-
-	// update ability status
-	channels, err := GetChannelsByIds(ids)
-	if err != nil {
+	if err := tx.Model(&Channel{}).Where("id in (?)", ids).Update("tag", tag).Error; err != nil {
 		tx.Rollback()
 		return err
 	}
-
-	for _, channel := range channels {
-		err = channel.UpdateAbilities(tx)
-		if err != nil {
+	var afterChannels []Channel
+	if err := tx.Where("id in (?)", ids).Find(&afterChannels).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	for i := range afterChannels {
+		if err := afterChannels[i].UpdateAbilities(tx); err != nil {
 			tx.Rollback()
 			return err
 		}
 	}
-
-	// 提交事务
+	pairs := pairChannelAuditSnapshots(beforeChannels, afterChannels)
+	for i := range pairs {
+		pairs[i].Action = ChannelAuditActionTagUpdate
+	}
+	if err := RecordChannelAuditPairs(tx, actor, source, batchID, pairs); err != nil {
+		tx.Rollback()
+		return err
+	}
 	return tx.Commit().Error
 }
 

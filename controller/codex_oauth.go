@@ -213,7 +213,42 @@ func completeCodexOAuthWithChannelID(c *gin.Context, channelID int) {
 	_ = session.Save()
 
 	if channelID > 0 {
-		if err := model.DB.Model(&model.Channel{}).Where("id = ?", channelID).Update("key", string(encoded)).Error; err != nil {
+		tx := model.DB.WithContext(c.Request.Context()).Begin()
+		if tx.Error != nil {
+			common.ApiError(c, tx.Error)
+			return
+		}
+		defer tx.Rollback()
+
+		before := &model.Channel{}
+		if err := model.WithChannelMutationLock(tx).First(before, "id = ?", channelID).Error; err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		if err := tx.Model(&model.Channel{}).Where("id = ?", channelID).Update("key", string(encoded)).Error; err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		after := &model.Channel{}
+		if err := tx.First(after, "id = ?", channelID).Error; err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		if err := model.RecordChannelAuditPairs(
+			tx,
+			NewChannelAuditActor(c),
+			"channel_codex_oauth_complete",
+			"",
+			[]model.ChannelAuditPair{{
+				Before: before,
+				After:  after,
+				Action: model.ChannelAuditActionCredentialChange,
+			}},
+		); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		if err := tx.Commit().Error; err != nil {
 			common.ApiError(c, err)
 			return
 		}

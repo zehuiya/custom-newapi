@@ -41,3 +41,101 @@ func TestGetSettingIgnoresRetiredThinkingToContent(t *testing.T) {
 	require.NoError(t, err)
 	require.NotContains(t, string(serialized), "thinking_to_content")
 }
+
+func TestValidateSettingsAcceptsCacheConfiguration(t *testing.T) {
+	tests := []struct {
+		name       string
+		rawSetting string
+	}{
+		{
+			name:       "cache enabled with default range",
+			rawSetting: `{"cache_enabled":true}`,
+		},
+		{
+			name:       "cache enabled with explicit zero range",
+			rawSetting: `{"cache_enabled":true,"cache_percentage_min":0,"cache_percentage_max":0}`,
+		},
+		{
+			name:       "cache enabled with configured range",
+			rawSetting: `{"cache_enabled":true,"cache_percentage_min":25,"cache_percentage_max":75}`,
+		},
+		{
+			name:       "cache enabled with one hundred percent range",
+			rawSetting: `{"cache_enabled":true,"cache_percentage_min":100,"cache_percentage_max":100}`,
+		},
+		{
+			name:       "no cache enabled",
+			rawSetting: `{"no_cache_enabled":true}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			channel := Channel{Setting: &tt.rawSetting}
+			require.NoError(t, channel.ValidateSettings())
+		})
+	}
+}
+
+func TestValidateSettingsRejectsInvalidCacheConfiguration(t *testing.T) {
+	tests := []struct {
+		name         string
+		rawSetting   string
+		errorMessage string
+	}{
+		{
+			name:         "cache and no cache are mutually exclusive",
+			rawSetting:   `{"cache_enabled":true,"no_cache_enabled":true}`,
+			errorMessage: "cache_enabled and no_cache_enabled cannot both be enabled",
+		},
+		{
+			name:         "minimum below zero",
+			rawSetting:   `{"cache_enabled":true,"cache_percentage_min":-1,"cache_percentage_max":90}`,
+			errorMessage: "cache_percentage_min must be between 0 and 100",
+		},
+		{
+			name:         "minimum above one hundred",
+			rawSetting:   `{"cache_enabled":true,"cache_percentage_min":101,"cache_percentage_max":101}`,
+			errorMessage: "cache_percentage_min must be between 0 and 100",
+		},
+		{
+			name:         "maximum below zero",
+			rawSetting:   `{"cache_enabled":true,"cache_percentage_min":0,"cache_percentage_max":-1}`,
+			errorMessage: "cache_percentage_max must be between 0 and 100",
+		},
+		{
+			name:         "maximum above one hundred",
+			rawSetting:   `{"cache_enabled":true,"cache_percentage_min":0,"cache_percentage_max":101}`,
+			errorMessage: "cache_percentage_max must be between 0 and 100",
+		},
+		{
+			name:         "minimum exceeds maximum",
+			rawSetting:   `{"cache_enabled":true,"cache_percentage_min":80,"cache_percentage_max":20}`,
+			errorMessage: "cache_percentage_min must not exceed cache_percentage_max",
+		},
+		{
+			name:         "disabled cache still rejects invalid persisted range",
+			rawSetting:   `{"cache_percentage_min":101,"cache_percentage_max":101}`,
+			errorMessage: "cache_percentage_min must be between 0 and 100",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			channel := Channel{Setting: &tt.rawSetting}
+			require.ErrorContains(t, channel.ValidateSettings(), tt.errorMessage)
+		})
+	}
+}
+
+func TestGetSettingPreservesExplicitZeroCacheRange(t *testing.T) {
+	rawSetting := `{"cache_enabled":true,"cache_percentage_min":0,"cache_percentage_max":0}`
+	channel := Channel{Setting: &rawSetting}
+
+	setting := channel.GetSetting()
+	require.True(t, setting.CacheEnabled)
+	require.NotNil(t, setting.CachePercentageMin)
+	require.NotNil(t, setting.CachePercentageMax)
+	require.Zero(t, *setting.CachePercentageMin)
+	require.Zero(t, *setting.CachePercentageMax)
+}

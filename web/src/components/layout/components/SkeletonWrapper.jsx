@@ -283,7 +283,7 @@ const SkeletonWrapper = ({
             .map((_, i) => (
               <CollapsedRow keyPrefix='c-personal' index={i} />
             ))}
-          {Array(5)
+          {Array(8)
             .fill(null)
             .map((_, i) => (
               <CollapsedRow keyPrefix='c-admin' index={i} />
@@ -297,7 +297,13 @@ const SkeletonWrapper = ({
       { key: 'console', titleWidth: 48, itemWidths: [64, 64, 64, 64, 64] },
       { key: 'personal', titleWidth: 64, itemWidths: [64, 64] },
       ...(showAdmin
-        ? [{ key: 'admin', titleWidth: 48, itemWidths: [64, 64, 80, 64, 64] }]
+        ? [
+            {
+              key: 'admin',
+              titleWidth: 48,
+              itemWidths: [64, 64, 64, 64, 80, 64, 64, 64],
+            },
+          ]
         : []),
     ];
 

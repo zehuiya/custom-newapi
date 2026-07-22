@@ -13,7 +13,10 @@ import (
 )
 
 type CodexCredentialRefreshOptions struct {
-	ResetCaches bool
+	ResetCaches  bool
+	AuditActor   model.ChannelAuditActor
+	AuditSource  string
+	AuditBatchID string
 }
 
 type CodexOAuthKey struct {
@@ -91,9 +94,58 @@ func RefreshCodexChannelCredential(ctx context.Context, channelID int, opts Code
 		return nil, nil, err
 	}
 
-	if err := model.DB.Model(&model.Channel{}).Where("id = ?", ch.Id).Update("key", string(encoded)).Error; err != nil {
+	actor := opts.AuditActor
+	if actor.Type == "" {
+		actor = model.ChannelAuditActor{
+			Type: model.ChannelAuditActorSystem,
+			Name: "system",
+		}
+	}
+	auditSource := strings.TrimSpace(opts.AuditSource)
+	if auditSource == "" {
+		auditSource = "channel_codex_credential_refresh"
+	}
+
+	tx := model.DB.WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return nil, nil, tx.Error
+	}
+	defer tx.Rollback()
+
+	before := &model.Channel{}
+	if err := model.WithChannelMutationLock(tx).First(before, "id = ?", ch.Id).Error; err != nil {
 		return nil, nil, err
 	}
+	// The token exchange runs before opening the database transaction. Avoid
+	// overwriting a credential that another refresh or administrator changed in
+	// the meantime.
+	if before.Key != ch.Key {
+		return nil, nil, errors.New("codex channel credential changed concurrently")
+	}
+	if err := tx.Model(&model.Channel{}).Where("id = ?", ch.Id).Update("key", string(encoded)).Error; err != nil {
+		return nil, nil, err
+	}
+	after := &model.Channel{}
+	if err := tx.First(after, "id = ?", ch.Id).Error; err != nil {
+		return nil, nil, err
+	}
+	if err := model.RecordChannelAuditPairs(
+		tx,
+		actor,
+		auditSource,
+		opts.AuditBatchID,
+		[]model.ChannelAuditPair{{
+			Before: before,
+			After:  after,
+			Action: model.ChannelAuditActionCredentialChange,
+		}},
+	); err != nil {
+		return nil, nil, err
+	}
+	if err := tx.Commit().Error; err != nil {
+		return nil, nil, err
+	}
+	ch = after
 
 	if opts.ResetCaches {
 		model.InitChannelCache()

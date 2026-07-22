@@ -1,8 +1,6 @@
 package service
 
 import (
-	"strings"
-
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
@@ -11,24 +9,15 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const noCacheChannelMarker = "[no_cache]"
-
-func channelNameHasNoCacheMarker(channelName string) bool {
-	return strings.Contains(strings.ToLower(channelName), noCacheChannelMarker)
-}
-
-func relayChannelName(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) string {
-	if relayInfo != nil && relayInfo.ChannelMeta != nil && relayInfo.ChannelName != "" {
-		return relayInfo.ChannelName
-	}
-	if ctx != nil {
-		return common.GetContextKeyString(ctx, constant.ContextKeyChannelName)
-	}
-	return ""
-}
-
 func shouldNormalizeNoCacheUsage(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) bool {
-	return channelNameHasNoCacheMarker(relayChannelName(ctx, relayInfo))
+	if relayInfo != nil && relayInfo.ChannelMeta != nil {
+		return relayInfo.ChannelSetting.NoCacheEnabled
+	}
+	if ctx == nil {
+		return false
+	}
+	setting, ok := common.GetContextKeyType[dto.ChannelSettings](ctx, constant.ContextKeyChannelSetting)
+	return ok && setting.NoCacheEnabled
 }
 
 func cacheReadTokensFromUsage(usage *dto.Usage) int {
@@ -47,8 +36,9 @@ func cacheReadTokensFromUsage(usage *dto.Usage) int {
 	return 0
 }
 
-// NormalizeNoCacheUsageForRelay folds cache-read tokens into regular input tokens
-// for channels marked with [no_cache]. It is intentionally idempotent.
+// NormalizeNoCacheUsageForRelay folds cache-read tokens into regular input
+// tokens when the channel's no-cache setting is enabled. It is intentionally
+// idempotent.
 func NormalizeNoCacheUsageForRelay(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage) bool {
 	if usage == nil || !shouldNormalizeNoCacheUsage(ctx, relayInfo) {
 		return false

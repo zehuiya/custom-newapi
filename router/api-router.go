@@ -207,6 +207,12 @@ func SetApiRouter(router *gin.Engine) {
 			ratioSyncRoute.GET("/channels", controller.GetSyncableChannels)
 			ratioSyncRoute.POST("/fetch", controller.FetchUpstreamRatios)
 		}
+		channelAuditRoute := apiRouter.Group("/channel_audit")
+		channelAuditRoute.Use(middleware.AdminAuth())
+		{
+			channelAuditRoute.GET("/", controller.GetChannelAuditLogs)
+			channelAuditRoute.GET("/:id", controller.GetChannelAuditLog)
+		}
 		channelRoute := apiRouter.Group("/channel")
 		channelRoute.Use(middleware.AdminAuth())
 		{

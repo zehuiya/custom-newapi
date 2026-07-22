@@ -100,7 +100,8 @@ type RelayInfo struct {
 	RequestURLPath         string
 	RequestHeaders         map[string]string
 	ShouldIncludeUsage     bool
-	ShouldInjectCacheInfo  bool // 是否需要注入缓存信息（渠道名包含[cache]且输入token>=4096）
+	ShouldInjectCacheInfo  bool // 是否按渠道配置注入模拟缓存信息
+	syntheticCachePercent  *int // 单次上游请求复用同一随机比例；0 是合法值
 	UpstreamResponseId     string
 	DisablePing            bool // 是否禁止向下游发送自定义 Ping
 	ClientWs               *websocket.Conn
@@ -177,6 +178,11 @@ type RelayInfo struct {
 }
 
 func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
+	// A RelayInfo can be reused when retrying with another channel. The sampled
+	// synthetic-cache percentage belongs to one upstream attempt and must not
+	// leak into the next channel's configured range.
+	info.syntheticCachePercent = nil
+
 	channelType := common.GetContextKeyInt(c, constant.ContextKeyChannelType)
 	paramOverride := common.GetContextKeyStringMap(c, constant.ContextKeyChannelParamOverride)
 	headerOverride := common.GetContextKeyStringMap(c, constant.ContextKeyChannelHeaderOverride)

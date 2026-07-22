@@ -4,10 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math/rand"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -26,19 +24,6 @@ import (
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
-
-var claudeRng = rand.New(rand.NewSource(time.Now().UnixNano()))
-
-// calculateCachedTokens 计算缓存token数量：随机抽取50-90%的输入作为缓存
-func calculateCachedTokens(totalPromptTokens int) int {
-	if totalPromptTokens == 0 {
-		return 0
-	}
-	// 生成50-90之间的随机整数百分比
-	percentage := claudeRng.Intn(41) + 50 // 50到90之间的随机数
-	cachedTokens := (totalPromptTokens * percentage) / 100
-	return cachedTokens
-}
 
 const (
 	WebSearchMaxUsesLow    = 1
@@ -997,10 +982,10 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 					data = rewriteClaudeUsageData(data, claudeResponse.Usage)
 				}
 			}
-			// 注入缓存信息到message_delta事件：如果渠道名包含[cache]、输入token>=4096、且上游未返回缓存数据
+			// 根据渠道配置向 message_delta 注入缓存信息；已有上游缓存数据时不会覆盖。
 			if info.ShouldInjectCacheInfo && claudeResponse.Usage != nil && claudeResponse.Usage.CacheReadInputTokens == 0 && claudeInfo.Usage != nil && claudeInfo.Usage.PromptTokens > 0 {
 				originalInputTokens := claudeInfo.Usage.PromptTokens
-				cachedTokens := calculateCachedTokens(originalInputTokens)
+				cachedTokens := info.CalculateSyntheticCacheTokens(originalInputTokens)
 				uncachedTokens := originalInputTokens - cachedTokens
 
 				claudeResponse.Usage.InputTokens = uncachedTokens
@@ -1068,11 +1053,11 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 	}
 	normalizeAnthropicInclusiveCacheUsage(info, claudeInfo.Usage)
 
-	// 注入缓存信息：如果渠道名包含[cache]、输入token>=4096、且上游未返回缓存数据
+	// 根据渠道配置注入缓存信息；已有上游缓存数据时不会覆盖。
 	if info.ShouldInjectCacheInfo && claudeInfo.Usage.PromptTokensDetails.CachedTokens == 0 && claudeInfo.Usage.PromptTokens >= 4096 {
-		// 随机抽取50-90%的prompt token作为缓存token
+		// 从渠道配置的百分比范围内随机抽取 prompt token 作为缓存 token。
 		originalPromptTokens := claudeInfo.Usage.PromptTokens
-		cachedTokens := calculateCachedTokens(originalPromptTokens)
+		cachedTokens := info.CalculateSyntheticCacheTokens(originalPromptTokens)
 		uncachedTokens := originalPromptTokens - cachedTokens
 
 		// 更新Usage：PromptTokens变成未缓存部分，CachedTokens是缓存部分
@@ -1152,11 +1137,11 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 			syncClaudeUsageFieldsFromRelayUsage(claudeResponse.Usage, claudeInfo.Usage)
 		}
 
-		// 注入缓存信息：如果渠道名包含[cache]、输入token>=4096、且上游未返回缓存数据
+		// 根据渠道配置注入缓存信息；已有上游缓存数据时不会覆盖。
 		if info.ShouldInjectCacheInfo && claudeResponse.Usage.CacheReadInputTokens == 0 {
-			// 随机抽取50-90%的input token作为缓存读取token
+			// 从渠道配置的百分比范围内随机抽取 input token 作为缓存读取 token。
 			originalInputTokens := claudeResponse.Usage.InputTokens
-			cachedTokens := calculateCachedTokens(originalInputTokens)
+			cachedTokens := info.CalculateSyntheticCacheTokens(originalInputTokens)
 			uncachedTokens := originalInputTokens - cachedTokens
 
 			// 更新响应数据

@@ -47,11 +47,9 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 	}
 	adaptor.Init(info)
 
-	// 检查是否需要注入缓存信息：渠道名包含[cache]且输入token>=4096
-	channelName := common.GetContextKeyString(c, constant.ContextKeyChannelName)
-	if strings.Contains(strings.ToLower(channelName), "[cache]") && info.GetEstimatePromptTokens() >= 4096 {
-		info.ShouldInjectCacheInfo = true
-	}
+	// Synthetic cache usage is controlled by channel settings rather than a
+	// marker embedded in the channel name.
+	info.ShouldInjectCacheInfo = info.ChannelSetting.ShouldInjectCache(info.GetEstimatePromptTokens())
 
 	if request.MaxTokens == nil || *request.MaxTokens == 0 {
 		defaultMaxTokens := uint(model_setting.GetClaudeSettings().GetDefaultMaxTokens(request.Model))
