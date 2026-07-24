@@ -21,6 +21,19 @@ func TestApplyTaskOtherRatiosToFixedPrice(t *testing.T) {
 	}
 }
 
+func TestApplyTaskOtherRatiosToSeedanceMiniVideoInput(t *testing.T) {
+	priceData := &types.PriceData{
+		Quota:       23000,
+		OtherRatios: map[string]float64{"video_input": 14.0 / 23.0},
+	}
+
+	applyTaskOtherRatios(priceData, "doubao-seedance-2-0-mini-260615")
+
+	if priceData.Quota != 14000 {
+		t.Fatalf("mini video-input quota = %d, want 14000", priceData.Quota)
+	}
+}
+
 func TestApplyTaskOtherRatiosKeepsTaskPricePatchCompatibility(t *testing.T) {
 	originalPatches := constant.TaskPricePatches
 	constant.TaskPricePatches = []string{"doubao-seedance-1.5-pro"}

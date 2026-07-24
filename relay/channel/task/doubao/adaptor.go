@@ -374,8 +374,8 @@ func parseGenerateAudio(req relaycommon.TaskSubmitReq) bool {
 	return true
 }
 
-// hasVideoInMetadata 直接检查 metadata 的 content 数组是否包含 video_url 条目，
-// 避免构建完整的上游 requestPayload。
+// hasVideoInMetadata 直接检查 metadata 的 content 数组是否包含 URL 非空的
+// video_url 条目，避免构建完整的上游 requestPayload。
 func hasVideoInMetadata(metadata map[string]interface{}) bool {
 	if metadata == nil {
 		return false
@@ -387,7 +387,7 @@ func hasVideoInMetadata(metadata map[string]interface{}) bool {
 	switch content := contentRaw.(type) {
 	case []ContentItem:
 		for _, item := range content {
-			if item.Type == "video_url" || item.VideoURL != nil {
+			if item.Type == "video_url" && hasNonEmptyVideoURL(item.VideoURL) {
 				return true
 			}
 		}
@@ -397,15 +397,26 @@ func hasVideoInMetadata(metadata map[string]interface{}) bool {
 			if !ok {
 				continue
 			}
-			if itemMap["type"] == "video_url" {
-				return true
-			}
-			if _, has := itemMap["video_url"]; has {
+			if itemMap["type"] == "video_url" && hasNonEmptyVideoURL(itemMap["video_url"]) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func hasNonEmptyVideoURL(raw any) bool {
+	switch videoURL := raw.(type) {
+	case *MediaURL:
+		return videoURL != nil && strings.TrimSpace(videoURL.URL) != ""
+	case MediaURL:
+		return strings.TrimSpace(videoURL.URL) != ""
+	case map[string]interface{}:
+		url, ok := videoURL["url"].(string)
+		return ok && strings.TrimSpace(url) != ""
+	default:
+		return false
+	}
 }
 
 // BuildRequestBody converts request into Doubao specific format.

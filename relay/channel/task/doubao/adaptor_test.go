@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -118,7 +119,39 @@ func TestAgentPlanBillingAliases(t *testing.T) {
 	}
 
 	if _, ok := GetSeedanceBillingConfig("doubao-seedance-2.0-mini"); ok {
-		t.Fatal("2.0-mini must not inherit an unverified differential billing config")
+		t.Fatal("Agent Plan 2.0-mini must not inherit regular Ark differential billing")
+	}
+}
+
+func TestSeedanceMiniBillingConfig(t *testing.T) {
+	const modelName = "doubao-seedance-2-0-mini-260615"
+
+	modelListed := false
+	for _, model := range ModelList {
+		if model == modelName {
+			modelListed = true
+			break
+		}
+	}
+	if !modelListed {
+		t.Fatalf("%s is missing from ModelList", modelName)
+	}
+
+	config, ok := GetSeedanceBillingConfig(modelName)
+	if !ok {
+		t.Fatalf("billing config missing for %s", modelName)
+	}
+	if config.BaseScenario != "不含视频输入" {
+		t.Fatalf("BaseScenario = %q, want %q", config.BaseScenario, "不含视频输入")
+	}
+	if !config.SupportVideoInput {
+		t.Fatal("SupportVideoInput = false, want true")
+	}
+	if config.SupportResolution {
+		t.Fatal("SupportResolution = true, want false")
+	}
+	if math.Abs(config.VideoInputRatio-14.0/23.0) > 1e-12 {
+		t.Fatalf("VideoInputRatio = %.15f, want %.15f", config.VideoInputRatio, 14.0/23.0)
 	}
 }
 
@@ -166,7 +199,7 @@ func TestEstimateBillingAgentPlanAudio(t *testing.T) {
 	}
 }
 
-func TestEstimateBillingAgentPlanVideoScenarios(t *testing.T) {
+func TestEstimateBillingVideoScenarios(t *testing.T) {
 	videoContent := []ContentItem{
 		{Type: "text", Text: "extend this video"},
 		{Type: "video_url", VideoURL: &MediaURL{URL: "https://example.com/input.mp4"}},
@@ -215,6 +248,44 @@ func TestEstimateBillingAgentPlanVideoScenarios(t *testing.T) {
 			want:      map[string]float64{"video_input": 22.0 / 37.0},
 			wantTotal: 22.0 / 37.0,
 		},
+		{
+			name:  "2.0 mini without video uses baseline",
+			model: "doubao-seedance-2-0-mini-260615",
+			metadata: map[string]interface{}{"content": []ContentItem{
+				{Type: "text", Text: "create a video"},
+				{Type: "image_url", ImageURL: &MediaURL{URL: "https://example.com/reference.jpg"}},
+				{Type: "audio_url", AudioURL: &MediaURL{URL: "https://example.com/reference.mp3"}},
+			}},
+			want: map[string]float64{},
+		},
+		{
+			name:      "2.0 mini with video",
+			model:     "doubao-seedance-2-0-mini-260615",
+			metadata:  map[string]interface{}{"resolution": "1080p", "content": videoContent},
+			want:      map[string]float64{"video_input": 14.0 / 23.0},
+			wantTotal: 14.0 / 23.0,
+		},
+		{
+			name:  "2.0 mini detects generic video metadata",
+			model: "doubao-seedance-2-0-mini-260615",
+			metadata: map[string]interface{}{"content": []interface{}{
+				map[string]interface{}{
+					"type":      "video_url",
+					"video_url": map[string]interface{}{"url": "https://example.com/reference.mp4"},
+				},
+			}},
+			want:      map[string]float64{"video_input": 14.0 / 23.0},
+			wantTotal: 14.0 / 23.0,
+		},
+		{
+			name:  "2.0 mini ignores empty video URL",
+			model: "doubao-seedance-2-0-mini-260615",
+			metadata: map[string]interface{}{"content": []ContentItem{
+				{Type: "text", Text: "create a video"},
+				{Type: "video_url", VideoURL: &MediaURL{URL: " "}},
+			}},
+			want: map[string]float64{},
+		},
 	}
 
 	for _, tt := range tests {
@@ -235,6 +306,45 @@ func TestEstimateBillingAgentPlanVideoScenarios(t *testing.T) {
 				t.Fatalf("combined ratio = %.15f, want %.15f", total, tt.wantTotal)
 			}
 		})
+	}
+}
+
+func TestEstimateBillingMiniFromValidatedRequest(t *testing.T) {
+	const modelName = "doubao-seedance-2-0-mini-260615"
+	requestBody := `{
+		"model": "doubao-seedance-2-0-mini-260615",
+		"content": [
+			{"type": "text", "text": "extend the reference video"},
+			{"type": "image_url", "image_url": {"url": "https://example.com/reference.jpg"}, "role": "reference_image"},
+			{"type": "video_url", "video_url": {"url": "https://example.com/reference.mp4"}, "role": "reference_video"},
+			{"type": "audio_url", "audio_url": {"url": "https://example.com/reference.mp3"}, "role": "reference_audio"}
+		],
+		"generate_audio": true,
+		"watermark": false
+	}`
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/video/generations", strings.NewReader(requestBody))
+	c.Request.Header.Set("Content-Type", "application/json")
+	info := &relaycommon.RelayInfo{
+		OriginModelName: modelName,
+		TaskRelayInfo:   &relaycommon.TaskRelayInfo{},
+	}
+	adaptor := &TaskAdaptor{}
+
+	if taskErr := adaptor.ValidateRequestAndSetAction(c, info); taskErr != nil {
+		t.Fatalf("ValidateRequestAndSetAction() error = %v", taskErr)
+	}
+	ratios := adaptor.EstimateBilling(c, info)
+	got, ok := ratios["video_input"]
+	if !ok {
+		t.Fatalf("video_input ratio missing; ratios=%v", ratios)
+	}
+	if math.Abs(got-14.0/23.0) > 1e-12 {
+		t.Fatalf("video_input ratio = %.15f, want %.15f", got, 14.0/23.0)
+	}
+	if len(ratios) != 1 {
+		t.Fatalf("ratios = %v, want only video_input", ratios)
 	}
 }
 

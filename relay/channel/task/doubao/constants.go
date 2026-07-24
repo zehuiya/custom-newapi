@@ -8,6 +8,7 @@ var ModelList = []string{
 	"doubao-seedance-1-0-pro-fast-251015",
 	"doubao-seedance-2-0-260128",
 	"doubao-seedance-2-0-fast-260128",
+	"doubao-seedance-2-0-mini-260615",
 }
 
 var ChannelName = "doubao-video"
@@ -64,6 +65,11 @@ var seedanceBillingConfigs = map[string]SeedanceBillingConfig{
 		},
 		VideoInputRatio: 22.0 / 37.0, // 含视频：22元，不含：37元 ≈ 0.595
 	},
+	"doubao-seedance-2-0-mini-260615": {
+		BaseScenario:      "不含视频输入",
+		SupportVideoInput: true,
+		VideoInputRatio:   14.0 / 23.0, // 含视频：14元，不含：23元 ≈ 0.609
+	},
 	"doubao-seedance-1-5-pro-251215": {
 		BaseScenario:      "有声视频",
 		SupportResolution: false,
@@ -90,8 +96,8 @@ var seedanceBillingConfigs = map[string]SeedanceBillingConfig{
 }
 
 // Agent Plan exposes stable model aliases while the regular Ark API uses
-// versioned model IDs. Both names must resolve to the same billing baseline so
-// that switching channel types does not silently disable differential pricing.
+// versioned model IDs. Map aliases only when both products have a confirmed
+// shared billing baseline; otherwise keep their pricing independent.
 var seedanceBillingAliases = map[string]string{
 	"doubao-seedance-1.5-pro":  "doubao-seedance-1-5-pro-251215",
 	"doubao-seedance-2.0":      "doubao-seedance-2-0-260128",
