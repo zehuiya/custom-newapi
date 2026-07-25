@@ -250,9 +250,11 @@ func SubmitResponse(c *gin.Context, info *relaycommon.RelayInfo, protocol string
 		meta.Stream = stream
 	}
 	meta.Protocol = protocol
-	response := sanitizePayload(responseBody)
+	var response any
 	if stream {
 		response = sanitizeStreamBody(responseBody)
+	} else {
+		response = sanitizePayload(responseBody)
 	}
 	line, err := m.prepareLine(capturedEntry{
 		Meta:              meta,
