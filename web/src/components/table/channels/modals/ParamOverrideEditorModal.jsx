@@ -46,6 +46,7 @@ const { Text } = Typography;
 const OPERATION_MODE_OPTIONS = [
   { label: '设置字段', value: 'set' },
   { label: '删除字段', value: 'delete' },
+  { label: '仅空值时删除', value: 'delete_if_null' },
   { label: '追加到末尾', value: 'append' },
   { label: '追加到开头', value: 'prepend' },
   { label: '复制字段', value: 'copy' },
@@ -90,6 +91,7 @@ const CONDITION_MODE_VALUES = new Set(
 
 const MODE_META = {
   delete: { path: true },
+  delete_if_null: { path: true },
   set: { path: true, value: true, keepOrigin: true },
   append: { path: true, value: true, keepOrigin: true },
   prepend: { path: true, value: true, keepOrigin: true },
@@ -146,6 +148,8 @@ const TO_REQUIRED_MODES = new Set([
 const MODE_DESCRIPTIONS = {
   set: '把值写入目标字段',
   delete: '删除目标字段',
+  delete_if_null:
+    '仅当目标字段显式为 null 时删除，其他值和缺失字段保持不变',
   append: '把值追加到数组 / 字符串 / 对象末尾',
   prepend: '把值追加到数组 / 字符串 / 对象开头',
   copy: '把来源字段复制到目标字段',

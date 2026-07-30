@@ -49,7 +49,7 @@ type ConditionOperation struct {
 
 type ParamOperation struct {
 	Path       string               `json:"path"`
-	Mode       string               `json:"mode"` // delete, set, move, copy, prepend, append, trim_prefix, trim_suffix, ensure_prefix, ensure_suffix, trim_space, to_lower, to_upper, replace, regex_replace, return_error, prune_objects, set_header, delete_header, copy_header, move_header, pass_headers, sync_fields
+	Mode       string               `json:"mode"` // delete, delete_if_null, set, move, copy, prepend, append, trim_prefix, trim_suffix, ensure_prefix, ensure_suffix, trim_space, to_lower, to_upper, replace, regex_replace, return_error, prune_objects, set_header, delete_header, copy_header, move_header, pass_headers, sync_fields
 	Value      interface{}          `json:"value"`
 	KeepOrigin bool                 `json:"keep_origin"`
 	From       string               `json:"from,omitempty"`
@@ -298,11 +298,11 @@ func buildParamOverrideAuditLine(mode, path, from, to string, value interface{})
 			return ""
 		}
 		return fmt.Sprintf("set %s = %s", path, formatParamOverrideAuditValue(value))
-	case "delete":
+	case "delete", "delete_if_null":
 		if path == "" {
 			return ""
 		}
-		return fmt.Sprintf("delete %s", path)
+		return fmt.Sprintf("%s %s", mode, path)
 	case "copy":
 		if from == "" || to == "" {
 			return ""
@@ -710,6 +710,17 @@ func applyOperations(jsonStr string, operations []ParamOperation, conditionConte
 					break
 				}
 				auditRecorder.recordOperation("delete", path, "", "", nil)
+			}
+		case "delete_if_null":
+			for _, path := range opPaths {
+				var deleted bool
+				result, deleted, err = deleteValueIfNull(result, path)
+				if err != nil {
+					break
+				}
+				if deleted {
+					auditRecorder.recordOperation("delete_if_null", path, "", "", nil)
+				}
 			}
 		case "set":
 			for _, path := range opPaths {
@@ -1513,7 +1524,7 @@ func copyValue(jsonStr, fromPath, toPath string) (string, error) {
 
 func isPathBasedOperation(mode string) bool {
 	switch mode {
-	case "delete", "set", "prepend", "append", "trim_prefix", "trim_suffix", "ensure_prefix", "ensure_suffix", "trim_space", "to_lower", "to_upper", "replace", "regex_replace", "prune_objects":
+	case "delete", "delete_if_null", "set", "prepend", "append", "trim_prefix", "trim_suffix", "ensure_prefix", "ensure_suffix", "trim_space", "to_lower", "to_upper", "replace", "regex_replace", "prune_objects":
 		return true
 	default:
 		return false
@@ -1595,6 +1606,23 @@ func deleteValue(jsonStr, path string) (string, error) {
 		return jsonStr, nil
 	}
 	return sjson.Delete(jsonStr, path)
+}
+
+func deleteValueIfNull(jsonStr, path string) (string, bool, error) {
+	if strings.TrimSpace(path) == "" {
+		return jsonStr, false, nil
+	}
+
+	current := gjson.Get(jsonStr, path)
+	if !current.Exists() || current.Type != gjson.Null {
+		return jsonStr, false, nil
+	}
+
+	result, err := sjson.Delete(jsonStr, path)
+	if err != nil {
+		return "", false, err
+	}
+	return result, true, nil
 }
 
 func modifyValue(jsonStr, path string, value interface{}, keepOrigin, isPrepend bool) (string, error) {

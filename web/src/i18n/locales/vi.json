@@ -804,6 +804,7 @@
     "初始化系统": "Khởi tạo hệ thống",
     "删请求头": "",
     "删除": "Xóa",
+    "删除空值": "Xóa giá trị null",
     "删除 Key 来源": "Xóa nguồn Key",
     "删除会彻底移除该订阅记录（含权益明细）。是否继续？": "Xóa sẽ loại bỏ hoàn toàn bản ghi đăng ký (bao gồm chi tiết quyền lợi). Tiếp tục?",
     "删除后无法恢复，确定要删除模型 \"{{name}}\" 吗？": "Cannot be recovered after deletion, are you sure you want to delete model \"{{name}}\"?",

@@ -817,6 +817,7 @@
     "初始化系统": "Initialize system",
     "删请求头": "",
     "删除": "Delete",
+    "删除空值": "Delete null value",
     "删除 Key 来源": "Delete Key Source",
     "删除会彻底移除该订阅记录（含权益明细）。是否继续？": "Deletion will permanently remove this subscription record (including benefit details). Continue?",
     "删除后无法恢复，确定要删除模型 \"{{name}}\" 吗？": "Cannot be recovered after deletion, are you sure you want to delete model \"{{name}}\"?",

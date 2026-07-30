@@ -263,6 +263,95 @@ func TestApplyParamOverrideDeleteWildcardPath(t *testing.T) {
 	assertJSONEqual(t, `{"tools":[{"type":"bash","custom":{"other":1}},{"type":"code","custom":{}},{"type":"noop","custom":{"other":2}}]}`, string(out))
 }
 
+func TestApplyParamOverrideDeleteIfNull(t *testing.T) {
+	input := []byte(`{
+		"null_value":null,
+		"empty_array":[],
+		"empty_object":{},
+		"empty_string":"",
+		"false_value":false,
+		"zero_value":0
+	}`)
+	override := map[string]interface{}{
+		"operations": []interface{}{
+			map[string]interface{}{
+				"path": "null_value",
+				"mode": "delete_if_null",
+			},
+			map[string]interface{}{
+				"path": "empty_array",
+				"mode": "delete_if_null",
+			},
+			map[string]interface{}{
+				"path": "empty_object",
+				"mode": "delete_if_null",
+			},
+			map[string]interface{}{
+				"path": "empty_string",
+				"mode": "delete_if_null",
+			},
+			map[string]interface{}{
+				"path": "false_value",
+				"mode": "delete_if_null",
+			},
+			map[string]interface{}{
+				"path": "zero_value",
+				"mode": "delete_if_null",
+			},
+			map[string]interface{}{
+				"path": "missing_value",
+				"mode": "delete_if_null",
+			},
+		},
+	}
+
+	out, err := ApplyParamOverride(input, override, nil)
+	if err != nil {
+		t.Fatalf("ApplyParamOverride returned error: %v", err)
+	}
+	assertJSONEqual(t, `{
+		"empty_array":[],
+		"empty_object":{},
+		"empty_string":"",
+		"false_value":false,
+		"zero_value":0
+	}`, string(out))
+}
+
+func TestApplyParamOverrideDeleteIfNullWildcardPath(t *testing.T) {
+	input := []byte(`{
+		"tools":[
+			{"name":"null-required","input_schema":{"type":"object","required":null}},
+			{"name":"array-required","input_schema":{"type":"object","required":["url"]}},
+			{"name":"empty-required","input_schema":{"type":"object","required":[]}},
+			{"name":"missing-required","input_schema":{"type":"object"}},
+			{"name":"missing-schema"}
+		]
+	}`)
+	override := map[string]interface{}{
+		"operations": []interface{}{
+			map[string]interface{}{
+				"path": "tools.*.input_schema.required",
+				"mode": "delete_if_null",
+			},
+		},
+	}
+
+	out, err := ApplyParamOverride(input, override, nil)
+	if err != nil {
+		t.Fatalf("ApplyParamOverride returned error: %v", err)
+	}
+	assertJSONEqual(t, `{
+		"tools":[
+			{"name":"null-required","input_schema":{"type":"object"}},
+			{"name":"array-required","input_schema":{"type":"object","required":["url"]}},
+			{"name":"empty-required","input_schema":{"type":"object","required":[]}},
+			{"name":"missing-required","input_schema":{"type":"object"}},
+			{"name":"missing-schema"}
+		]
+	}`, string(out))
+}
+
 func TestApplyParamOverrideSetWildcardPath(t *testing.T) {
 	input := []byte(`{"tools":[{"custom":{"tag":"A"}},{"custom":{"tag":"B"}},{"custom":{"tag":"C"}}]}`)
 	override := map[string]interface{}{

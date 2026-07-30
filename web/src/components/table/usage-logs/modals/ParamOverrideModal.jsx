@@ -50,6 +50,8 @@ const getActionLabel = (action, t) => {
       return t('设置');
     case 'delete':
       return t('删除');
+    case 'delete_if_null':
+      return t('删除空值');
     case 'copy':
       return t('复制');
     case 'move':
