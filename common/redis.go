@@ -16,6 +16,15 @@ import (
 var RDB *redis.Client
 var RedisEnabled = true
 
+var redisHIncrByIfPresentScript = redis.NewScript(`
+local ttl = redis.call('PTTL', KEYS[1])
+if ttl <= 0 then
+    return 0
+end
+redis.call('HINCRBY', KEYS[1], ARGV[1], ARGV[2])
+return 1
+`)
+
 func RedisKeyCacheSeconds() int {
 	return SyncFrequency
 }
@@ -276,25 +285,15 @@ func RedisHIncrBy(key, field string, delta int64) error {
 	if DebugEnabled {
 		SysLog(fmt.Sprintf("Redis HINCRBY: key=%s, field=%s, delta=%d", key, field, delta))
 	}
-	ttlCmd := RDB.TTL(context.Background(), key)
-	ttl, err := ttlCmd.Result()
-	if err != nil && !errors.Is(err, redis.Nil) {
-		return fmt.Errorf("failed to get TTL: %w", err)
-	}
-
-	if ttl > 0 {
-		ctx := context.Background()
-		txn := RDB.TxPipeline()
-
-		incrCmd := txn.HIncrBy(ctx, key, field, delta)
-		if err := incrCmd.Err(); err != nil {
-			return err
-		}
-
-		txn.Expire(ctx, key, ttl)
-
-		_, err = txn.Exec(ctx)
-		return err
+	_, err := redisHIncrByIfPresentScript.Run(
+		context.Background(),
+		RDB,
+		[]string{key},
+		field,
+		delta,
+	).Result()
+	if err != nil {
+		return fmt.Errorf("failed to increment Redis hash field: %w", err)
 	}
 	return nil
 }

@@ -60,6 +60,13 @@ func cacheGetTokenByKey(key string) (*Token, error) {
 	if err != nil {
 		return nil, err
 	}
+	if !isTokenCacheComplete(&token) {
+		return nil, fmt.Errorf("incomplete token cache")
+	}
 	token.Key = key
 	return &token, nil
+}
+
+func isTokenCacheComplete(token *Token) bool {
+	return token != nil && token.Id > 0 && token.UserId > 0 && token.Status != 0
 }
