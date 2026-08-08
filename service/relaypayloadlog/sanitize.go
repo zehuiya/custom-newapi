@@ -2,6 +2,7 @@ package relaypayloadlog
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -282,7 +283,7 @@ func sanitizeStreamText(value string) string {
 	if value == "" {
 		return value
 	}
-	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(value)), "data:") {
+	if hasDataURIPrefix(value) {
 		return summarizeString(value, "omitted_data_uri")
 	}
 	if redacted, changed := redactEmbeddedDataURIs(value); changed {
@@ -300,7 +301,7 @@ func sanitizeStreamText(value string) string {
 func sanitizeValue(value any, key string) any {
 	switch v := value.(type) {
 	case map[string]any:
-		if typ, ok := stringMapValue(v, "type"); ok && mediaContentTypes[strings.ToLower(typ)] {
+		if typ, ok := stringMapValue(v, "type"); ok && isMediaContentType(typ) {
 			return summarizeMediaMap(v, typ)
 		}
 		out := make(map[string]any, len(v))
@@ -333,7 +334,7 @@ func sanitizeString(value string, key string) any {
 	if isMediaKey(lowerKey) || isBase64Key(lowerKey) {
 		return summarizeString(value, "omitted_media_or_base64")
 	}
-	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(value)), "data:") {
+	if hasDataURIPrefix(value) {
 		return summarizeString(value, "omitted_data_uri")
 	}
 	if redacted, changed := redactEmbeddedDataURIs(value); changed {
@@ -349,23 +350,119 @@ func sanitizeString(value string, key string) any {
 }
 
 func redactEmbeddedDataURIs(value string) (string, bool) {
-	const prefix = "data:"
-	changed := false
-	for {
-		start := strings.Index(strings.ToLower(value), prefix)
-		if start < 0 {
-			return value, changed
+	start := indexDataURIPrefix(value, 0)
+	if start < 0 {
+		return value, false
+	}
+
+	type dataURIRange struct {
+		start int
+		end   int
+	}
+	var inlineRanges [8]dataURIRange
+	ranges := inlineRanges[:0]
+	redactedLength := len(value)
+	for start >= 0 {
+		end := dataURIEnd(value, start)
+		ranges = append(ranges, dataURIRange{start: start, end: end})
+		redactedLength -= end - start
+		redactedLength += len("[omitted_data_uri length=]") + decimalDigitCount(end-start)
+		start = indexDataURIPrefix(value, end)
+	}
+
+	var redacted strings.Builder
+	redacted.Grow(redactedLength)
+	cursor := 0
+	for _, dataURI := range ranges {
+		redacted.WriteString(value[cursor:dataURI.start])
+		redacted.WriteString("[omitted_data_uri length=")
+		var lengthBuffer [20]byte
+		redacted.Write(strconv.AppendInt(lengthBuffer[:0], int64(dataURI.end-dataURI.start), 10))
+		redacted.WriteByte(']')
+		cursor = dataURI.end
+	}
+	redacted.WriteString(value[cursor:])
+	return redacted.String(), true
+}
+
+func dataURIEnd(value string, start int) int {
+	for i := start + len("data:"); i < len(value); i++ {
+		switch value[i] {
+		case ' ', '\t', '\r', '\n', '"', '\'', ']', ')', '}':
+			return i
 		}
-		end := len(value)
-		for i := start + len(prefix); i < len(value); i++ {
-			switch value[i] {
-			case ' ', '\t', '\r', '\n', '"', '\'', ']', ')', '}':
-				end = i
-				i = len(value)
-			}
+	}
+	return len(value)
+}
+
+func decimalDigitCount(value int) int {
+	digits := 1
+	for value >= 10 {
+		value /= 10
+		digits++
+	}
+	return digits
+}
+
+func hasDataURIPrefix(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	return len(trimmed) >= len("data:") && isDataURIPrefixAt(trimmed, 0)
+}
+
+func indexDataURIPrefix(value string, from int) int {
+	if from < 0 {
+		from = 0
+	}
+	for search := from; search < len(value); {
+		relativeColon := strings.IndexByte(value[search:], ':')
+		if relativeColon < 0 {
+			return -1
 		}
-		value = value[:start] + summarizeString(value[start:end], "omitted_data_uri") + value[end:]
-		changed = true
+		colon := search + relativeColon
+		start := colon - len("data")
+		if start >= from && isDataURIPrefixAt(value, start) {
+			return start
+		}
+		search = colon + 1
+	}
+	return -1
+}
+
+func isDataURIPrefixAt(value string, start int) bool {
+	if start < 0 || start+len("data:") > len(value) {
+		return false
+	}
+	return lowerASCII(value[start]) == 'd' &&
+		lowerASCII(value[start+1]) == 'a' &&
+		lowerASCII(value[start+2]) == 't' &&
+		lowerASCII(value[start+3]) == 'a' &&
+		value[start+4] == ':'
+}
+
+func lowerASCII(value byte) byte {
+	if value >= 'A' && value <= 'Z' {
+		return value + ('a' - 'A')
+	}
+	return value
+}
+
+func isMediaContentType(value string) bool {
+	if mediaContentTypes[value] {
+		return true
+	}
+	switch len(value) {
+	case len("image"):
+		return strings.EqualFold(value, "image") ||
+			strings.EqualFold(value, "audio") ||
+			strings.EqualFold(value, "video")
+	case len("image_url"):
+		return strings.EqualFold(value, "image_url") ||
+			strings.EqualFold(value, "video_url")
+	case len("input_image"):
+		return strings.EqualFold(value, "input_image") ||
+			strings.EqualFold(value, "input_audio")
+	default:
+		return false
 	}
 }
 
@@ -470,10 +567,32 @@ func sliceValue(value any) ([]any, bool) {
 }
 
 func normalizeKey(key string) string {
-	key = strings.ToLower(key)
-	key = strings.ReplaceAll(key, "_", "")
-	key = strings.ReplaceAll(key, "-", "")
-	return key
+	needsNormalization := false
+	for i := 0; i < len(key); i++ {
+		char := key[i]
+		if char >= 0x80 {
+			key = strings.ToLower(key)
+			key = strings.ReplaceAll(key, "_", "")
+			return strings.ReplaceAll(key, "-", "")
+		}
+		if char == '_' || char == '-' || (char >= 'A' && char <= 'Z') {
+			needsNormalization = true
+		}
+	}
+	if !needsNormalization {
+		return key
+	}
+
+	var normalized strings.Builder
+	normalized.Grow(len(key))
+	for i := 0; i < len(key); i++ {
+		char := key[i]
+		if char == '_' || char == '-' {
+			continue
+		}
+		normalized.WriteByte(lowerASCII(char))
+	}
+	return normalized.String()
 }
 
 func looksLikeBase64(value string) bool {

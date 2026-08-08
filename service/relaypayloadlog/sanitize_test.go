@@ -46,6 +46,45 @@ func TestSanitizePayloadRedactsEmbeddedDataURI(t *testing.T) {
 	require.NotContains(t, message, strings.Repeat("a", 512))
 }
 
+func TestRedactEmbeddedDataURIsPreservesCaseInsensitiveBehavior(t *testing.T) {
+	first := "DATA:image/png;base64," + strings.Repeat("a", 600)
+	second := "data:video/mp4;base64," + strings.Repeat("b", 600)
+	value := "before " + first + " middle " + second + " after"
+
+	redacted, changed := redactEmbeddedDataURIs(value)
+
+	require.True(t, changed)
+	require.Equal(t,
+		"before "+summarizeString(first, "omitted_data_uri")+
+			" middle "+summarizeString(second, "omitted_data_uri")+" after",
+		redacted,
+	)
+}
+
+func TestRedactEmbeddedDataURIsReturnsOriginalStringWhenUnchanged(t *testing.T) {
+	value := strings.Repeat("ordinary text ", 100)
+	redacted, changed := redactEmbeddedDataURIs(value)
+	require.False(t, changed)
+	require.Equal(t, value, redacted)
+}
+
+func TestRedactEmbeddedDataURIsHandlesManyValues(t *testing.T) {
+	values := make([]string, 12)
+	for i := range values {
+		values[i] = "DATA:image/png;base64," + strings.Repeat("a", 32)
+	}
+	redacted, changed := redactEmbeddedDataURIs(strings.Join(values, " "))
+	require.True(t, changed)
+	require.Equal(t, len(values), strings.Count(redacted, "[omitted_data_uri length="))
+	require.NotContains(t, redacted, "DATA:image")
+}
+
+func TestNormalizeKeyPreservesExistingNormalization(t *testing.T) {
+	require.Equal(t, "imageurl", normalizeKey("Image_URL"))
+	require.Equal(t, "reasoningcontent", normalizeKey("REASONING-CONTENT"))
+	require.Equal(t, "äimage", normalizeKey("Ä_IMAGE"))
+}
+
 func TestSanitizeStreamChunksKeepsReasoningAndToolCalls(t *testing.T) {
 	chunks := []string{
 		`{"choices":[{"delta":{"reasoning_content":"think "}}]}`,
@@ -146,4 +185,30 @@ func TestNormalizeConfigClampsSampleRate(t *testing.T) {
 func TestShouldSampleHonorsZeroAndOne(t *testing.T) {
 	require.False(t, (&manager{cfg: Config{SampleRate: 0}}).shouldSample())
 	require.True(t, (&manager{cfg: Config{SampleRate: 1}}).shouldSample())
+}
+
+var benchmarkSanitizedText string
+var benchmarkNormalizedKey string
+
+func BenchmarkNormalizeKey(b *testing.B) {
+	keys := []string{"content", "image_url", "REASONING-CONTENT", "input_audio"}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		benchmarkNormalizedKey = normalizeKey(keys[i%len(keys)])
+	}
+}
+
+func BenchmarkRedactEmbeddedDataURIs(b *testing.B) {
+	media := "DATA:image/png;base64," + strings.Repeat("a", 4096)
+	parts := make([]string, 0, 17)
+	for i := 0; i < 8; i++ {
+		parts = append(parts, strings.Repeat("ordinary text ", 512), media)
+	}
+	value := strings.Join(parts, " ")
+	b.ReportAllocs()
+	b.SetBytes(int64(len(value)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		benchmarkSanitizedText, _ = redactEmbeddedDataURIs(value)
+	}
 }

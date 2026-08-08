@@ -3988,6 +3988,20 @@
     "补充缓存信息与忽略上游缓存不能同时开启": "Supplementing cache usage and ignoring upstream cache cannot be enabled at the same time",
     "缓存比例必须是 0 到 100 之间的整数，且下限不能大于上限": "Cache percentages must be integers from 0 to 100, and the lower bound cannot exceed the upper bound",
     "缓存 {{min}}%-{{max}}%": "Cache {{min}}%-{{max}}%",
-    "无缓存计费": "No-cache billing"
+    "无缓存计费": "No-cache billing",
+    "减少缓存": "Reduce cache",
+    "减少缓存百分比": "Cache reduction percentage",
+    "减少缓存百分比（%）": "Cache reduction percentage (%)",
+    "开启后，按百分比将缓存读取 tokens 转为普通输入 tokens，用于调整缓存计费。": "When enabled, converts a percentage of cache-read tokens to regular input tokens to adjust cache billing.",
+    "补充缓存信息、忽略上游缓存和减少缓存只能开启一个": "Only one of supplement cache usage, ignore upstream cache, and reduce cache can be enabled",
+    "减少缓存百分比必须是 0 到 100 之间的整数": "Cache reduction percentage must be an integer from 0 to 100",
+    "按配置百分比将缓存读取 tokens 转为普通输入 tokens。": "Converts the configured percentage of cache-read tokens to regular input tokens.",
+    "减少缓存 {{percentage}}%": "Reduce cache {{percentage}}%",
+    "兜底渠道": "Fallback channels",
+    "选择兜底渠道": "Select a fallback channel",
+    "未配置时保持原有重试流程": "Uses the existing retry flow when not configured",
+    "获取兜底渠道列表失败": "Failed to load fallback channels",
+    "上移": "Move up",
+    "下移": "Move down"
   }
 }

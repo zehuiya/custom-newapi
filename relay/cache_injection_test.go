@@ -47,6 +47,15 @@ func TestChannelSettingsShouldInjectCache(t *testing.T) {
 			estimatedPromptTokens: 5000,
 			want:                  false,
 		},
+		{
+			name: "cache reduction takes precedence defensively",
+			setting: dto.ChannelSettings{
+				CacheEnabled:          true,
+				CacheReductionEnabled: true,
+			},
+			estimatedPromptTokens: 5000,
+			want:                  false,
+		},
 	}
 
 	for _, tt := range tests {

@@ -4246,6 +4246,20 @@
     "补充缓存信息与忽略上游缓存不能同时开启": "Không thể đồng thời bật bổ sung thông tin sử dụng bộ nhớ đệm và bỏ qua bộ nhớ đệm thượng nguồn",
     "缓存比例必须是 0 到 100 之间的整数，且下限不能大于上限": "Tỷ lệ bộ nhớ đệm phải là số nguyên từ 0 đến 100 và giới hạn dưới không được lớn hơn giới hạn trên",
     "缓存 {{min}}%-{{max}}%": "Bộ nhớ đệm {{min}}%-{{max}}%",
-    "无缓存计费": "Tính phí không theo bộ nhớ đệm"
+    "无缓存计费": "Tính phí không theo bộ nhớ đệm",
+    "减少缓存": "Giảm bộ nhớ đệm",
+    "减少缓存百分比": "Phần trăm giảm bộ nhớ đệm",
+    "减少缓存百分比（%）": "Phần trăm giảm bộ nhớ đệm (%)",
+    "开启后，按百分比将缓存读取 tokens 转为普通输入 tokens，用于调整缓存计费。": "Khi bật, chuyển một tỷ lệ token đọc bộ nhớ đệm thành token đầu vào thông thường để điều chỉnh tính phí.",
+    "补充缓存信息、忽略上游缓存和减少缓存只能开启一个": "Chỉ có thể bật một trong ba chế độ: bổ sung bộ nhớ đệm, bỏ qua bộ nhớ đệm thượng nguồn hoặc giảm bộ nhớ đệm",
+    "减少缓存百分比必须是 0 到 100 之间的整数": "Phần trăm giảm bộ nhớ đệm phải là số nguyên từ 0 đến 100",
+    "按配置百分比将缓存读取 tokens 转为普通输入 tokens。": "Chuyển tỷ lệ token đọc bộ nhớ đệm đã cấu hình thành token đầu vào thông thường.",
+    "减少缓存 {{percentage}}%": "Giảm bộ nhớ đệm {{percentage}}%",
+    "兜底渠道": "Kênh dự phòng",
+    "选择兜底渠道": "Chọn kênh dự phòng",
+    "未配置时保持原有重试流程": "Giữ nguyên quy trình thử lại hiện tại khi chưa cấu hình",
+    "获取兜底渠道列表失败": "Không thể tải danh sách kênh dự phòng",
+    "上移": "Di chuyển lên",
+    "下移": "Di chuyển xuống"
   }
 }

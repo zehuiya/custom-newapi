@@ -1,20 +1,25 @@
 package dto
 
 type ChannelSettings struct {
-	ForceFormat            bool   `json:"force_format,omitempty"`
-	Proxy                  string `json:"proxy"`
-	PassThroughBodyEnabled bool   `json:"pass_through_body_enabled,omitempty"`
-	SystemPrompt           string `json:"system_prompt,omitempty"`
-	SystemPromptOverride   bool   `json:"system_prompt_override,omitempty"`
-	CacheEnabled           bool   `json:"cache_enabled,omitempty"`
-	CachePercentageMin     *int   `json:"cache_percentage_min,omitempty"`
-	CachePercentageMax     *int   `json:"cache_percentage_max,omitempty"`
-	NoCacheEnabled         bool   `json:"no_cache_enabled,omitempty"`
+	ForceFormat              bool   `json:"force_format,omitempty"`
+	Proxy                    string `json:"proxy"`
+	PassThroughBodyEnabled   bool   `json:"pass_through_body_enabled,omitempty"`
+	SystemPrompt             string `json:"system_prompt,omitempty"`
+	SystemPromptOverride     bool   `json:"system_prompt_override,omitempty"`
+	CacheEnabled             bool   `json:"cache_enabled,omitempty"`
+	CachePercentageMin       *int   `json:"cache_percentage_min,omitempty"`
+	CachePercentageMax       *int   `json:"cache_percentage_max,omitempty"`
+	NoCacheEnabled           bool   `json:"no_cache_enabled,omitempty"`
+	CacheReductionEnabled    bool   `json:"cache_reduction_enabled,omitempty"`
+	CacheReductionPercentage *int   `json:"cache_reduction_percentage,omitempty"`
+	FallbackChannelIDs       []int  `json:"fallback_channel_ids,omitempty"`
 }
 
 const (
-	DefaultCachePercentageMin = 50
-	DefaultCachePercentageMax = 90
+	DefaultCachePercentageMin       = 50
+	DefaultCachePercentageMax       = 90
+	DefaultCacheReductionPercentage = 10
+	MaxFallbackChannels             = 20
 )
 
 // GetCachePercentageRange returns the configured synthetic cache range while
@@ -33,7 +38,14 @@ func (s ChannelSettings) GetCachePercentageRange() (int, int) {
 }
 
 func (s ChannelSettings) ShouldInjectCache(estimatedPromptTokens int) bool {
-	return s.CacheEnabled && !s.NoCacheEnabled && estimatedPromptTokens >= 4096
+	return s.CacheEnabled && !s.NoCacheEnabled && !s.CacheReductionEnabled && estimatedPromptTokens >= 4096
+}
+
+func (s ChannelSettings) GetCacheReductionPercentage() int {
+	if s.CacheReductionPercentage == nil {
+		return DefaultCacheReductionPercentage
+	}
+	return *s.CacheReductionPercentage
 }
 
 type VertexKeyType string

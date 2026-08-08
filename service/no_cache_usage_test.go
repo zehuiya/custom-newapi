@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -22,6 +23,18 @@ func noCacheRelayInfo(channelName string, noCacheEnabled bool, finalFormat types
 		ChannelMeta: &relaycommon.ChannelMeta{
 			ChannelName:    channelName,
 			ChannelSetting: dto.ChannelSettings{NoCacheEnabled: noCacheEnabled},
+		},
+	}
+}
+
+func cacheReductionRelayInfo(percentage *int, finalFormat types.RelayFormat) *relaycommon.RelayInfo {
+	return &relaycommon.RelayInfo{
+		FinalRequestRelayFormat: finalFormat,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelSetting: dto.ChannelSettings{
+				CacheReductionEnabled:    true,
+				CacheReductionPercentage: percentage,
+			},
 		},
 	}
 }
@@ -172,4 +185,150 @@ func TestNormalizeNoCacheUsageForRelayTieredParamsTreatCacheReadAsPrompt(t *test
 	require.Equal(t, 130.0, params.P)
 	require.Equal(t, 20.0, params.C)
 	require.Equal(t, 0.0, params.CR)
+}
+
+func TestAdjustCacheUsageForRelayReducesCacheByConfiguredPercentage(t *testing.T) {
+	percentage := 10
+	usage := &dto.Usage{
+		PromptTokens:         1000,
+		InputTokens:          1000,
+		CompletionTokens:     100,
+		TotalTokens:          1100,
+		PromptCacheHitTokens: 900,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens: 900,
+		},
+		InputTokensDetails: &dto.InputTokenDetails{CachedTokens: 900},
+	}
+
+	changed := AdjustCacheUsageForRelay(nil, cacheReductionRelayInfo(&percentage, types.RelayFormatOpenAI), usage)
+
+	require.True(t, changed)
+	require.Equal(t, 1090, usage.PromptTokens)
+	require.Equal(t, 1090, usage.InputTokens)
+	require.Equal(t, 810, usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 810, usage.InputTokensDetails.CachedTokens)
+	require.Equal(t, 810, usage.PromptCacheHitTokens)
+	require.Equal(t, 1190, usage.TotalTokens)
+}
+
+func TestAdjustCacheUsageForRelayUsesDefaultTenPercent(t *testing.T) {
+	usage := &dto.Usage{
+		PromptTokens:     1000,
+		CompletionTokens: 100,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens: 900,
+		},
+	}
+
+	require.True(t, AdjustCacheUsageForRelay(nil, cacheReductionRelayInfo(nil, types.RelayFormatClaude), usage))
+	require.Equal(t, 1090, usage.PromptTokens)
+	require.Equal(t, 810, usage.PromptTokensDetails.CachedTokens)
+}
+
+func TestAdjustCacheUsageForRelayReductionIsIdempotent(t *testing.T) {
+	percentage := 10
+	info := cacheReductionRelayInfo(&percentage, types.RelayFormatClaude)
+	usage := &dto.Usage{
+		PromptTokens:     1000,
+		CompletionTokens: 100,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens: 900,
+		},
+	}
+
+	require.True(t, AdjustCacheUsageForRelay(nil, info, usage))
+	require.False(t, AdjustCacheUsageForRelay(nil, info, usage))
+	require.Equal(t, 1090, usage.PromptTokens)
+	require.Equal(t, 810, usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 1190, usage.TotalTokens)
+}
+
+func TestAdjustCacheUsageForRelayHandlesPartialStreamingUsageRefresh(t *testing.T) {
+	percentage := 10
+	info := cacheReductionRelayInfo(&percentage, types.RelayFormatClaude)
+	usage := &dto.Usage{
+		PromptTokens:     1000,
+		InputTokens:      1000,
+		CompletionTokens: 0,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens: 900,
+		},
+	}
+	require.True(t, AdjustCacheUsageForRelay(nil, info, usage))
+
+	// A later Claude message_delta refreshes input/output but omits cache usage.
+	usage.PromptTokens = 1000
+	usage.CompletionTokens = 100
+	usage.TotalTokens = 1100
+	require.True(t, AdjustCacheUsageForRelay(nil, info, usage))
+	require.Equal(t, 1090, usage.PromptTokens)
+	require.Equal(t, 1090, usage.InputTokens)
+	require.Equal(t, 810, usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 1190, usage.TotalTokens)
+
+	// A provider may instead refresh only the original cache value.
+	usage.PromptTokensDetails.CachedTokens = 900
+	require.True(t, AdjustCacheUsageForRelay(nil, info, usage))
+	require.Equal(t, 1090, usage.PromptTokens)
+	require.Equal(t, 810, usage.PromptTokensDetails.CachedTokens)
+}
+
+func TestAdjustCacheUsageForRelayReductionUsesFallbackCacheField(t *testing.T) {
+	percentage := 10
+	usage := &dto.Usage{
+		PromptTokens:       1000,
+		CompletionTokens:   100,
+		InputTokensDetails: &dto.InputTokenDetails{CachedTokens: 900},
+	}
+
+	require.True(t, AdjustCacheUsageForRelay(nil, cacheReductionRelayInfo(&percentage, types.RelayFormatOpenAI), usage))
+	require.Equal(t, 1090, usage.PromptTokens)
+	require.Equal(t, 810, usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 810, usage.InputTokensDetails.CachedTokens)
+}
+
+func TestAdjustCacheUsageForRelayZeroReductionIsNoOp(t *testing.T) {
+	percentage := 0
+	usage := &dto.Usage{
+		PromptTokens: 1000,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens: 900,
+		},
+	}
+
+	require.False(t, AdjustCacheUsageForRelay(nil, cacheReductionRelayInfo(&percentage, types.RelayFormatOpenAI), usage))
+	require.Equal(t, 1000, usage.PromptTokens)
+	require.Equal(t, 900, usage.PromptTokensDetails.CachedTokens)
+}
+
+func TestCacheReductionAdjustedUsageFeedsBilling(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	percentage := 10
+	info := cacheReductionRelayInfo(&percentage, types.RelayFormatClaude)
+	info.OriginModelName = "cache-reduction-test"
+	info.StartTime = time.Now()
+	info.PriceData = types.PriceData{
+		ModelRatio:      1,
+		CompletionRatio: 2,
+		CacheRatio:      0.25,
+		GroupRatioInfo:  types.GroupRatioInfo{GroupRatio: 1},
+	}
+	usage := &dto.Usage{
+		PromptTokens:     1000,
+		CompletionTokens: 100,
+		UsageSemantic:    "anthropic",
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens: 900,
+		},
+	}
+
+	require.True(t, AdjustCacheUsageForRelay(ctx, info, usage))
+	summary := calculateTextQuotaSummary(ctx, info, usage)
+
+	require.Equal(t, 1090, summary.PromptTokens)
+	require.Equal(t, 810, summary.CacheTokens)
+	// 1090 normal input + 810*0.25 cache input + 100*2 output = 1492.5.
+	require.Equal(t, 1493, summary.Quota)
 }

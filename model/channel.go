@@ -106,6 +106,30 @@ func (channel *Channel) GetKeys() []string {
 	return keys
 }
 
+func (channel *Channel) HasEnabledKey() bool {
+	if channel == nil {
+		return false
+	}
+	if !channel.ChannelInfo.IsMultiKey {
+		return strings.TrimSpace(channel.Key) != ""
+	}
+	keys := channel.GetKeys()
+	if len(keys) == 0 {
+		return false
+	}
+
+	lock := GetChannelPollingLock(channel.Id)
+	lock.Lock()
+	defer lock.Unlock()
+	for index := range keys {
+		status, exists := channel.ChannelInfo.MultiKeyStatusList[index]
+		if !exists || status == common.ChannelStatusEnabled {
+			return true
+		}
+	}
+	return false
+}
+
 func (channel *Channel) GetNextEnabledKey() (string, int, *types.NewAPIError) {
 	// If not in multi-key mode, return the original key string directly.
 	if !channel.ChannelInfo.IsMultiKey {
@@ -409,6 +433,22 @@ func GetAllChannels(startIdx int, num int, selectAll bool, idSort bool) ([]*Chan
 		err = DB.Order(order).Limit(num).Offset(startIdx).Omit("key").Find(&channels).Error
 	}
 	return channels, err
+}
+
+type ChannelOption struct {
+	Id     int    `json:"id"`
+	Name   string `json:"name"`
+	Type   int    `json:"type"`
+	Status int    `json:"status"`
+}
+
+func GetChannelOptions() ([]ChannelOption, error) {
+	options := make([]ChannelOption, 0)
+	err := DB.Model(&Channel{}).
+		Select("id", "name", "type", "status").
+		Order("id asc").
+		Find(&options).Error
+	return options, err
 }
 
 func GetChannelsByTag(tag string, idSort bool, selectAll bool) ([]*Channel, error) {
@@ -1310,8 +1350,18 @@ func (channel *Channel) ValidateSettings() error {
 		if err := common.Unmarshal(settingBytes, channelParams); err != nil {
 			return err
 		}
-		if channelParams.CacheEnabled && channelParams.NoCacheEnabled {
-			return errors.New("cache_enabled and no_cache_enabled cannot both be enabled")
+		cacheModeCount := 0
+		if channelParams.CacheEnabled {
+			cacheModeCount++
+		}
+		if channelParams.NoCacheEnabled {
+			cacheModeCount++
+		}
+		if channelParams.CacheReductionEnabled {
+			cacheModeCount++
+		}
+		if cacheModeCount > 1 {
+			return errors.New("cache_enabled, no_cache_enabled, and cache_reduction_enabled are mutually exclusive")
 		}
 		if channelParams.CacheEnabled || channelParams.CachePercentageMin != nil || channelParams.CachePercentageMax != nil {
 			minPercentage, maxPercentage := channelParams.GetCachePercentageRange()
@@ -1324,6 +1374,28 @@ func (channel *Channel) ValidateSettings() error {
 			if minPercentage > maxPercentage {
 				return fmt.Errorf("cache_percentage_min must not exceed cache_percentage_max: %d > %d", minPercentage, maxPercentage)
 			}
+		}
+		if channelParams.CacheReductionEnabled || channelParams.CacheReductionPercentage != nil {
+			percentage := channelParams.GetCacheReductionPercentage()
+			if percentage < 0 || percentage > 100 {
+				return fmt.Errorf("cache_reduction_percentage must be between 0 and 100, got %d", percentage)
+			}
+		}
+		if len(channelParams.FallbackChannelIDs) > dto.MaxFallbackChannels {
+			return fmt.Errorf("fallback_channel_ids cannot contain more than %d channels", dto.MaxFallbackChannels)
+		}
+		seenFallbackChannelIDs := make(map[int]struct{}, len(channelParams.FallbackChannelIDs))
+		for _, fallbackChannelID := range channelParams.FallbackChannelIDs {
+			if fallbackChannelID <= 0 {
+				return fmt.Errorf("fallback_channel_ids must contain positive channel IDs, got %d", fallbackChannelID)
+			}
+			if channel.Id > 0 && fallbackChannelID == channel.Id {
+				return fmt.Errorf("fallback_channel_ids cannot contain the channel itself: %d", fallbackChannelID)
+			}
+			if _, exists := seenFallbackChannelIDs[fallbackChannelID]; exists {
+				return fmt.Errorf("fallback_channel_ids contains duplicate channel ID: %d", fallbackChannelID)
+			}
+			seenFallbackChannelIDs[fallbackChannelID] = struct{}{}
 		}
 
 		// thinking_to_content has been retired. Strip it from every write path so

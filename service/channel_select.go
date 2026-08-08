@@ -2,9 +2,11 @@ package service
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
@@ -18,7 +20,22 @@ type RetryParam struct {
 	Retry        *int
 	TokenLimit   *model.ChannelTokenLimit
 	resetNextTry bool
+
+	firstChannelID     int
+	fallbackChannelIDs []int
+	fallbackIndex      int
+	fallbackGroup      string
+	attemptIndex       int
+	normalRetryStarted bool
 }
+
+type RetryChannelSource int
+
+const (
+	RetryChannelSourceInitial RetryChannelSource = iota
+	RetryChannelSourceFallback
+	RetryChannelSourceOriginal
+)
 
 func (p *RetryParam) GetRetry() int {
 	if p.Retry == nil {
@@ -44,6 +61,104 @@ func (p *RetryParam) IncreaseRetry() {
 
 func (p *RetryParam) ResetRetryNextTry() {
 	p.resetNextTry = true
+}
+
+func (p *RetryParam) ConfigureFallback(firstChannelID int, fallbackChannelIDs []int, fallbackGroup string) {
+	p.firstChannelID = firstChannelID
+	p.fallbackGroup = fallbackGroup
+	p.fallbackIndex = 0
+	p.attemptIndex = 0
+	p.normalRetryStarted = false
+	p.fallbackChannelIDs = p.fallbackChannelIDs[:0]
+
+	seen := make(map[int]struct{}, len(fallbackChannelIDs))
+	for _, channelID := range fallbackChannelIDs {
+		if channelID <= 0 || channelID == firstChannelID {
+			continue
+		}
+		if _, exists := seen[channelID]; exists {
+			continue
+		}
+		seen[channelID] = struct{}{}
+		p.fallbackChannelIDs = append(p.fallbackChannelIDs, channelID)
+		if len(p.fallbackChannelIDs) == dto.MaxFallbackChannels {
+			break
+		}
+	}
+}
+
+func (p *RetryParam) GetAttemptIndex() int {
+	return p.attemptIndex
+}
+
+func (p *RetryParam) GetFallbackGroup() string {
+	return p.fallbackGroup
+}
+
+func (p *RetryParam) NextFallbackChannelID() (int, bool) {
+	if p.fallbackIndex >= len(p.fallbackChannelIDs) {
+		return 0, false
+	}
+	channelID := p.fallbackChannelIDs[p.fallbackIndex]
+	p.fallbackIndex++
+	return channelID, true
+}
+
+func (p *RetryParam) PrepareOriginalRetry(maxRetry int) bool {
+	if !p.normalRetryStarted {
+		if maxRetry < 1 {
+			return false
+		}
+		p.SetRetry(1)
+		p.normalRetryStarted = true
+	}
+	return p.GetRetry() <= maxRetry
+}
+
+func (p *RetryParam) HasNextRetry(source RetryChannelSource, maxRetry int) bool {
+	if p.fallbackIndex < len(p.fallbackChannelIDs) {
+		return true
+	}
+	if !p.normalRetryStarted {
+		return maxRetry >= 1
+	}
+	if source != RetryChannelSourceOriginal {
+		return p.GetRetry() <= maxRetry
+	}
+	if p.resetNextTry {
+		return true
+	}
+	return p.GetRetry() < maxRetry
+}
+
+func (p *RetryParam) AdvanceAfterAttempt(source RetryChannelSource) {
+	p.attemptIndex++
+	if source == RetryChannelSourceOriginal {
+		p.IncreaseRetry()
+	}
+}
+
+func CacheGetFallbackSatisfiedChannel(param *RetryParam, channelID int) (*model.Channel, error) {
+	if param == nil {
+		return nil, errors.New("retry parameter is nil")
+	}
+	channel, err := model.CacheGetChannel(channelID)
+	if err != nil {
+		return nil, err
+	}
+	if channel.Status != common.ChannelStatusEnabled {
+		return nil, fmt.Errorf("fallback channel #%d is disabled", channelID)
+	}
+	if !model.IsChannelEnabledForGroupModel(param.GetFallbackGroup(), param.ModelName, channelID) {
+		return nil, fmt.Errorf("fallback channel #%d is unavailable for group %s and model %s", channelID, param.GetFallbackGroup(), param.ModelName)
+	}
+	if !param.TokenLimit.Satisfies(channel) {
+		return nil, fmt.Errorf("fallback channel #%d does not satisfy token limits", channelID)
+	}
+	if !channel.HasEnabledKey() {
+		return nil, fmt.Errorf("fallback channel #%d has no enabled key", channelID)
+	}
+	return channel, nil
 }
 
 func HasContextLimitedChannelForSelection(c *gin.Context, tokenGroup string, modelName string) bool {

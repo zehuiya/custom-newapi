@@ -68,6 +68,7 @@ import ParamOverrideEditorModal from './ParamOverrideEditorModal';
 import JSONEditor from '../../../common/ui/JSONEditor';
 import SecureVerificationModal from '../../../common/modals/SecureVerificationModal';
 import StatusCodeRiskGuardModal from './StatusCodeRiskGuardModal';
+import FallbackChannelSelector from './FallbackChannelSelector';
 import ChannelKeyDisplay from '../../../common/ui/ChannelKeyDisplay';
 import { useSecureVerification } from '../../../../hooks/common/useSecureVerification';
 import { parseChannelConnectionString } from '../../../../helpers/token';
@@ -76,6 +77,10 @@ import {
   collectInvalidStatusCodeEntries,
   collectNewDisallowedStatusCodeRedirects,
 } from './statusCodeRiskGuard';
+import {
+  formatFallbackChannels,
+  normalizeFallbackChannelIds,
+} from './fallbackChannelUtils';
 import {
   IconSave,
   IconClose,
@@ -109,6 +114,7 @@ const UPSTREAM_DETECTED_MODEL_PREVIEW_LIMIT = 8;
 const ADVANCED_SETTINGS_EXPANDED_KEY = 'channel-advanced-settings-expanded';
 const DEFAULT_CACHE_PERCENTAGE_MIN = 50;
 const DEFAULT_CACHE_PERCENTAGE_MAX = 90;
+const DEFAULT_CACHE_REDUCTION_PERCENTAGE = 10;
 
 const PARAM_OVERRIDE_LEGACY_TEMPLATE = {
   temperature: 0,
@@ -171,6 +177,11 @@ const CHANNEL_CHANGE_FIELDS = [
   { key: 'max_output_tokens', label: '最大输出', valueType: 'number' },
   { key: 'min_input_tokens', label: '最小输入', valueType: 'number' },
   { key: 'max_input_tokens', label: '最大输入', valueType: 'number' },
+  {
+    key: 'fallback_channel_ids',
+    label: '兜底渠道',
+    valueType: 'fallbackChannels',
+  },
   { key: 'force_format', label: '强制格式化', valueType: 'boolean' },
   {
     key: 'pass_through_body_enabled',
@@ -203,6 +214,16 @@ const CHANNEL_CHANGE_FIELDS = [
     key: 'no_cache_enabled',
     label: '忽略上游缓存',
     valueType: 'boolean',
+  },
+  {
+    key: 'cache_reduction_enabled',
+    label: '减少缓存',
+    valueType: 'boolean',
+  },
+  {
+    key: 'cache_reduction_percentage',
+    label: '减少缓存百分比',
+    valueType: 'number',
   },
   {
     key: 'is_enterprise_account',
@@ -285,7 +306,7 @@ const normalizeChannelChangeValue = (value, valueType) => {
   if (valueType === 'number') {
     return Number(value || 0);
   }
-  if (valueType === 'array') {
+  if (valueType === 'array' || valueType === 'fallbackChannels') {
     if (!Array.isArray(value)) {
       return String(value || '')
         .split(',')
@@ -329,7 +350,12 @@ const redactSensitiveUrl = (value) =>
         : match;
     });
 
-const formatChannelChangeValue = (value, config, t) => {
+const formatChannelChangeValue = (
+  value,
+  config,
+  t,
+  fallbackChannelOptions = [],
+) => {
   const normalized = normalizeChannelChangeValue(value, config.valueType);
   if (config.valueType === 'boolean') {
     return normalized ? t('开') : t('关');
@@ -342,6 +368,9 @@ const formatChannelChangeValue = (value, config, t) => {
   }
   if (config.valueType === 'array') {
     return normalized.length > 0 ? normalized.join(', ') : t('未设置');
+  }
+  if (config.valueType === 'fallbackChannels') {
+    return formatFallbackChannels(value, fallbackChannelOptions, t('未设置'));
   }
   if (config.valueType === 'json' && normalized) {
     try {
@@ -356,7 +385,13 @@ const formatChannelChangeValue = (value, config, t) => {
   return normalized === '' ? t('未设置') : String(normalized);
 };
 
-const collectChannelChanges = (beforeValues, afterValues, t, keyMode) =>
+const collectChannelChanges = (
+  beforeValues,
+  afterValues,
+  t,
+  keyMode,
+  fallbackChannelOptions = [],
+) =>
   CHANNEL_CHANGE_FIELDS.reduce((changes, config) => {
     const beforeValue = beforeValues?.[config.key];
     const afterValue = afterValues?.[config.key];
@@ -377,8 +412,18 @@ const collectChannelChanges = (beforeValues, afterValues, t, keyMode) =>
       return changes;
     }
 
-    let before = formatChannelChangeValue(beforeValue, config, t);
-    let after = formatChannelChangeValue(afterValue, config, t);
+    let before = formatChannelChangeValue(
+      beforeValue,
+      config,
+      t,
+      fallbackChannelOptions,
+    );
+    let after = formatChannelChangeValue(
+      afterValue,
+      config,
+      t,
+      fallbackChannelOptions,
+    );
     if (config.key === 'key') {
       before = t('已配置（隐藏）');
       const keyModeLabel =
@@ -479,6 +524,9 @@ const EditChannelModal = (props) => {
     cache_percentage_min: DEFAULT_CACHE_PERCENTAGE_MIN,
     cache_percentage_max: DEFAULT_CACHE_PERCENTAGE_MAX,
     no_cache_enabled: false,
+    cache_reduction_enabled: false,
+    cache_reduction_percentage: DEFAULT_CACHE_REDUCTION_PERCENTAGE,
+    fallback_channel_ids: [],
     settings: '',
     // 仅 Vertex: 密钥格式（存入 settings.vertex_key_type）
     vertex_key_type: 'json',
@@ -508,6 +556,9 @@ const EditChannelModal = (props) => {
   const [originModelOptions, setOriginModelOptions] = useState([]);
   const [modelOptions, setModelOptions] = useState([]);
   const [groupOptions, setGroupOptions] = useState([]);
+  const [fallbackChannelOptions, setFallbackChannelOptions] = useState([]);
+  const [fallbackChannelOptionsLoading, setFallbackChannelOptionsLoading] =
+    useState(false);
   const [basicModels, setBasicModels] = useState([]);
   const [fullModels, setFullModels] = useState([]);
   const [modelGroups, setModelGroups] = useState([]);
@@ -800,11 +851,22 @@ const EditChannelModal = (props) => {
 
   const handleCacheModeChange = (key, value) => {
     const updates = { [key]: value };
-    if (value && key === 'cache_enabled') {
-      updates.no_cache_enabled = false;
-    }
-    if (value && key === 'no_cache_enabled') {
-      updates.cache_enabled = false;
+    if (value) {
+      for (const modeKey of [
+        'cache_enabled',
+        'no_cache_enabled',
+        'cache_reduction_enabled',
+      ]) {
+        if (modeKey !== key) {
+          updates[modeKey] = false;
+        }
+      }
+      if (
+        key === 'cache_reduction_enabled' &&
+        !Number.isInteger(Number(inputs.cache_reduction_percentage))
+      ) {
+        updates.cache_reduction_percentage = DEFAULT_CACHE_REDUCTION_PERCENTAGE;
+      }
     }
     applyChannelSettingsChanges(updates);
   };
@@ -1149,6 +1211,20 @@ const EditChannelModal = (props) => {
             ? cachePercentageMax
             : DEFAULT_CACHE_PERCENTAGE_MAX;
           data.no_cache_enabled = parsedSettings.no_cache_enabled === true;
+          data.cache_reduction_enabled =
+            parsedSettings.cache_reduction_enabled === true;
+          const cacheReductionPercentage = Number(
+            parsedSettings.cache_reduction_percentage ??
+              DEFAULT_CACHE_REDUCTION_PERCENTAGE,
+          );
+          data.cache_reduction_percentage = Number.isFinite(
+            cacheReductionPercentage,
+          )
+            ? cacheReductionPercentage
+            : DEFAULT_CACHE_REDUCTION_PERCENTAGE;
+          data.fallback_channel_ids = normalizeFallbackChannelIds(
+            parsedSettings.fallback_channel_ids,
+          );
         } catch (error) {
           console.error('解析渠道设置失败:', error);
           data.force_format = false;
@@ -1160,6 +1236,9 @@ const EditChannelModal = (props) => {
           data.cache_percentage_min = DEFAULT_CACHE_PERCENTAGE_MIN;
           data.cache_percentage_max = DEFAULT_CACHE_PERCENTAGE_MAX;
           data.no_cache_enabled = false;
+          data.cache_reduction_enabled = false;
+          data.cache_reduction_percentage = DEFAULT_CACHE_REDUCTION_PERCENTAGE;
+          data.fallback_channel_ids = [];
         }
       } else {
         data.force_format = false;
@@ -1171,6 +1250,9 @@ const EditChannelModal = (props) => {
         data.cache_percentage_min = DEFAULT_CACHE_PERCENTAGE_MIN;
         data.cache_percentage_max = DEFAULT_CACHE_PERCENTAGE_MAX;
         data.no_cache_enabled = false;
+        data.cache_reduction_enabled = false;
+        data.cache_reduction_percentage = DEFAULT_CACHE_REDUCTION_PERCENTAGE;
+        data.fallback_channel_ids = [];
       }
 
       if (data.settings) {
@@ -1316,12 +1398,14 @@ const EditChannelModal = (props) => {
         (data.max_output_tokens && data.max_output_tokens !== 0) ||
         (data.min_input_tokens && data.min_input_tokens !== 0) ||
         (data.max_input_tokens && data.max_input_tokens !== 0) ||
+        (data.fallback_channel_ids && data.fallback_channel_ids.length > 0) ||
         (data.proxy && data.proxy.trim()) ||
         (data.system_prompt && data.system_prompt.trim()) ||
         data.pass_through_body_enabled ||
         data.force_format ||
         data.cache_enabled ||
         data.no_cache_enabled ||
+        data.cache_reduction_enabled ||
         data.claude_beta_query ||
         data.system_prompt_override;
       if (hasAdvancedValues) {
@@ -1475,6 +1559,20 @@ const EditChannelModal = (props) => {
     }
   };
 
+  const fetchFallbackChannelOptions = async () => {
+    setFallbackChannelOptionsLoading(true);
+    try {
+      const res = await API.get('/api/channel/options');
+      if (res?.data?.success) {
+        setFallbackChannelOptions(res.data.data || []);
+      }
+    } catch (error) {
+      showError(error.message || t('获取兜底渠道列表失败'));
+    } finally {
+      setFallbackChannelOptionsLoading(false);
+    }
+  };
+
   const fetchModelGroups = async () => {
     try {
       const res = await API.get('/api/prefill_group?type=model');
@@ -1615,6 +1713,7 @@ const EditChannelModal = (props) => {
   useEffect(() => {
     setModelSearchValue('');
     if (props.visible) {
+      fetchFallbackChannelOptions();
       if (isEdit) {
         loadChannel();
       } else {
@@ -1876,6 +1975,12 @@ const EditChannelModal = (props) => {
       (localInputs.cache_enabled ?? inputs.cache_enabled) === true;
     localInputs.no_cache_enabled =
       (localInputs.no_cache_enabled ?? inputs.no_cache_enabled) === true;
+    localInputs.cache_reduction_enabled =
+      (localInputs.cache_reduction_enabled ??
+        inputs.cache_reduction_enabled) === true;
+    localInputs.fallback_channel_ids = normalizeFallbackChannelIds(
+      inputs.fallback_channel_ids,
+    );
     localInputs.cache_percentage_min = Number(
       localInputs.cache_percentage_min ??
         inputs.cache_percentage_min ??
@@ -1886,8 +1991,18 @@ const EditChannelModal = (props) => {
         inputs.cache_percentage_max ??
         DEFAULT_CACHE_PERCENTAGE_MAX,
     );
-    if (localInputs.cache_enabled && localInputs.no_cache_enabled) {
-      showError(t('补充缓存信息与忽略上游缓存不能同时开启'));
+    localInputs.cache_reduction_percentage = Number(
+      localInputs.cache_reduction_percentage ??
+        inputs.cache_reduction_percentage ??
+        DEFAULT_CACHE_REDUCTION_PERCENTAGE,
+    );
+    const enabledCacheModes = [
+      localInputs.cache_enabled,
+      localInputs.no_cache_enabled,
+      localInputs.cache_reduction_enabled,
+    ].filter(Boolean).length;
+    if (enabledCacheModes > 1) {
+      showError(t('补充缓存信息、忽略上游缓存和减少缓存只能开启一个'));
       return;
     }
     if (
@@ -1899,6 +2014,15 @@ const EditChannelModal = (props) => {
         localInputs.cache_percentage_min > localInputs.cache_percentage_max)
     ) {
       showError(t('缓存比例必须是 0 到 100 之间的整数，且下限不能大于上限'));
+      return;
+    }
+    if (
+      localInputs.cache_reduction_enabled &&
+      (!Number.isInteger(localInputs.cache_reduction_percentage) ||
+        localInputs.cache_reduction_percentage < 0 ||
+        localInputs.cache_reduction_percentage > 100)
+    ) {
+      showError(t('减少缓存百分比必须是 0 到 100 之间的整数'));
       return;
     }
 
@@ -2130,6 +2254,9 @@ const EditChannelModal = (props) => {
       cache_percentage_min: localInputs.cache_percentage_min,
       cache_percentage_max: localInputs.cache_percentage_max,
       no_cache_enabled: localInputs.no_cache_enabled === true,
+      cache_reduction_enabled: localInputs.cache_reduction_enabled === true,
+      cache_reduction_percentage: localInputs.cache_reduction_percentage,
+      fallback_channel_ids: localInputs.fallback_channel_ids,
     };
     localInputs.setting = JSON.stringify(channelExtraSettings);
 
@@ -2228,6 +2355,9 @@ const EditChannelModal = (props) => {
     delete localInputs.cache_percentage_min;
     delete localInputs.cache_percentage_max;
     delete localInputs.no_cache_enabled;
+    delete localInputs.cache_reduction_enabled;
+    delete localInputs.cache_reduction_percentage;
+    delete localInputs.fallback_channel_ids;
     delete localInputs.is_enterprise_account;
     // 顶层的 vertex_key_type 不应发送给后端
     delete localInputs.vertex_key_type;
@@ -2262,6 +2392,7 @@ const EditChannelModal = (props) => {
         channelReviewValues,
         t,
         isMultiKeyChannel ? keyMode : undefined,
+        fallbackChannelOptions,
       );
       if (channelChanges.length === 0) {
         pendingChannelUpdateRef.current = null;
@@ -2934,6 +3065,25 @@ const EditChannelModal = (props) => {
                     </Col>
                   </Row>
 
+                  <div className='mt-4'>
+                    <Text className='mb-2 block text-sm font-medium'>
+                      {t('兜底渠道')}
+                    </Text>
+                    <FallbackChannelSelector
+                      value={inputs.fallback_channel_ids}
+                      options={fallbackChannelOptions}
+                      currentChannelId={channelId}
+                      loading={fallbackChannelOptionsLoading}
+                      onChange={(value) =>
+                        handleChannelSettingsChange(
+                          'fallback_channel_ids',
+                          value,
+                        )
+                      }
+                      t={t}
+                    />
+                  </div>
+
                   {inputs.type === 1 && (
                     <>
                       <div className='mt-4 mb-2 text-sm font-medium text-gray-700'>
@@ -3122,6 +3272,35 @@ const EditChannelModal = (props) => {
                     extraText={t(
                       '开启后，上游返回的缓存读取 tokens 将合并为普通输入 tokens，并按普通输入计费。',
                     )}
+                  />
+
+                  <Form.Switch
+                    field='cache_reduction_enabled'
+                    label={t('减少缓存')}
+                    checkedText={t('开')}
+                    uncheckedText={t('关')}
+                    onChange={(value) =>
+                      handleCacheModeChange('cache_reduction_enabled', value)
+                    }
+                    extraText={t(
+                      '开启后，按百分比将缓存读取 tokens 转为普通输入 tokens，用于调整缓存计费。',
+                    )}
+                  />
+
+                  <Form.InputNumber
+                    field='cache_reduction_percentage'
+                    label={t('减少缓存百分比（%）')}
+                    min={0}
+                    max={100}
+                    step={1}
+                    disabled={!inputs.cache_reduction_enabled}
+                    onNumberChange={(value) =>
+                      handleChannelSettingsChange(
+                        'cache_reduction_percentage',
+                        value,
+                      )
+                    }
+                    style={{ width: '100%' }}
                   />
                 </div>
 

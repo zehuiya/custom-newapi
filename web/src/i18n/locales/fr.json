@@ -3716,6 +3716,20 @@
     "补充缓存信息与忽略上游缓存不能同时开启": "L’ajout de l’utilisation du cache et l’ignorance du cache en amont ne peuvent pas être activés simultanément",
     "缓存比例必须是 0 到 100 之间的整数，且下限不能大于上限": "Les pourcentages de cache doivent être des entiers compris entre 0 et 100, et la limite inférieure ne peut pas dépasser la limite supérieure",
     "缓存 {{min}}%-{{max}}%": "Cache {{min}} %-{{max}} %",
-    "无缓存计费": "Facturation sans cache"
+    "无缓存计费": "Facturation sans cache",
+    "减少缓存": "Réduire le cache",
+    "减少缓存百分比": "Pourcentage de réduction du cache",
+    "减少缓存百分比（%）": "Pourcentage de réduction du cache (%)",
+    "开启后，按百分比将缓存读取 tokens 转为普通输入 tokens，用于调整缓存计费。": "Une fois activé, convertit un pourcentage des tokens lus du cache en tokens d’entrée normaux afin d’ajuster la facturation.",
+    "补充缓存信息、忽略上游缓存和减少缓存只能开启一个": "Une seule option peut être activée : compléter le cache, ignorer le cache en amont ou réduire le cache",
+    "减少缓存百分比必须是 0 到 100 之间的整数": "Le pourcentage de réduction du cache doit être un entier compris entre 0 et 100",
+    "按配置百分比将缓存读取 tokens 转为普通输入 tokens。": "Convertit le pourcentage configuré de tokens lus du cache en tokens d’entrée normaux.",
+    "减少缓存 {{percentage}}%": "Réduire le cache de {{percentage}}%",
+    "兜底渠道": "Canaux de secours",
+    "选择兜底渠道": "Sélectionner un canal de secours",
+    "未配置时保持原有重试流程": "Conserve le flux de nouvelle tentative existant si non configuré",
+    "获取兜底渠道列表失败": "Échec du chargement des canaux de secours",
+    "上移": "Monter",
+    "下移": "Descendre"
   }
 }

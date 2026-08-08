@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/stretchr/testify/require"
 )
 
@@ -67,6 +68,18 @@ func TestValidateSettingsAcceptsCacheConfiguration(t *testing.T) {
 			name:       "no cache enabled",
 			rawSetting: `{"no_cache_enabled":true}`,
 		},
+		{
+			name:       "cache reduction enabled with default percentage",
+			rawSetting: `{"cache_reduction_enabled":true}`,
+		},
+		{
+			name:       "cache reduction enabled with explicit zero percentage",
+			rawSetting: `{"cache_reduction_enabled":true,"cache_reduction_percentage":0}`,
+		},
+		{
+			name:       "cache reduction enabled with one hundred percent",
+			rawSetting: `{"cache_reduction_enabled":true,"cache_reduction_percentage":100}`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -86,7 +99,22 @@ func TestValidateSettingsRejectsInvalidCacheConfiguration(t *testing.T) {
 		{
 			name:         "cache and no cache are mutually exclusive",
 			rawSetting:   `{"cache_enabled":true,"no_cache_enabled":true}`,
-			errorMessage: "cache_enabled and no_cache_enabled cannot both be enabled",
+			errorMessage: "cache_enabled, no_cache_enabled, and cache_reduction_enabled are mutually exclusive",
+		},
+		{
+			name:         "cache injection and reduction are mutually exclusive",
+			rawSetting:   `{"cache_enabled":true,"cache_reduction_enabled":true}`,
+			errorMessage: "cache_enabled, no_cache_enabled, and cache_reduction_enabled are mutually exclusive",
+		},
+		{
+			name:         "no cache and reduction are mutually exclusive",
+			rawSetting:   `{"no_cache_enabled":true,"cache_reduction_enabled":true}`,
+			errorMessage: "cache_enabled, no_cache_enabled, and cache_reduction_enabled are mutually exclusive",
+		},
+		{
+			name:         "all cache modes are mutually exclusive",
+			rawSetting:   `{"cache_enabled":true,"no_cache_enabled":true,"cache_reduction_enabled":true}`,
+			errorMessage: "cache_enabled, no_cache_enabled, and cache_reduction_enabled are mutually exclusive",
 		},
 		{
 			name:         "minimum below zero",
@@ -118,6 +146,21 @@ func TestValidateSettingsRejectsInvalidCacheConfiguration(t *testing.T) {
 			rawSetting:   `{"cache_percentage_min":101,"cache_percentage_max":101}`,
 			errorMessage: "cache_percentage_min must be between 0 and 100",
 		},
+		{
+			name:         "cache reduction below zero",
+			rawSetting:   `{"cache_reduction_enabled":true,"cache_reduction_percentage":-1}`,
+			errorMessage: "cache_reduction_percentage must be between 0 and 100",
+		},
+		{
+			name:         "cache reduction above one hundred",
+			rawSetting:   `{"cache_reduction_enabled":true,"cache_reduction_percentage":101}`,
+			errorMessage: "cache_reduction_percentage must be between 0 and 100",
+		},
+		{
+			name:         "disabled reduction still rejects invalid persisted percentage",
+			rawSetting:   `{"cache_reduction_percentage":101}`,
+			errorMessage: "cache_reduction_percentage must be between 0 and 100",
+		},
 	}
 
 	for _, tt := range tests {
@@ -138,4 +181,91 @@ func TestGetSettingPreservesExplicitZeroCacheRange(t *testing.T) {
 	require.NotNil(t, setting.CachePercentageMax)
 	require.Zero(t, *setting.CachePercentageMin)
 	require.Zero(t, *setting.CachePercentageMax)
+}
+
+func TestGetSettingCacheReductionPercentageDefaultsAndPreservesZero(t *testing.T) {
+	defaultRawSetting := `{"cache_reduction_enabled":true}`
+	defaultSetting := (&Channel{Setting: &defaultRawSetting}).GetSetting()
+	require.True(t, defaultSetting.CacheReductionEnabled)
+	require.Nil(t, defaultSetting.CacheReductionPercentage)
+	require.Equal(t, dto.DefaultCacheReductionPercentage, defaultSetting.GetCacheReductionPercentage())
+
+	zeroRawSetting := `{"cache_reduction_enabled":true,"cache_reduction_percentage":0}`
+	zeroSetting := (&Channel{Setting: &zeroRawSetting}).GetSetting()
+	require.NotNil(t, zeroSetting.CacheReductionPercentage)
+	require.Zero(t, zeroSetting.GetCacheReductionPercentage())
+}
+
+func TestValidateSettingsAcceptsOrderedFallbackChannels(t *testing.T) {
+	rawSetting := `{"fallback_channel_ids":[2,3,5]}`
+	channel := Channel{Id: 1, Setting: &rawSetting}
+
+	require.NoError(t, channel.ValidateSettings())
+	require.Equal(t, []int{2, 3, 5}, channel.GetSetting().FallbackChannelIDs)
+}
+
+func TestValidateSettingsRejectsInvalidFallbackChannels(t *testing.T) {
+	tests := []struct {
+		name         string
+		channelID    int
+		fallbackIDs  string
+		errorMessage string
+	}{
+		{name: "non-positive", channelID: 1, fallbackIDs: `[0]`, errorMessage: "positive channel IDs"},
+		{name: "self reference", channelID: 2, fallbackIDs: `[2]`, errorMessage: "cannot contain the channel itself"},
+		{name: "duplicate", channelID: 1, fallbackIDs: `[2,2]`, errorMessage: "duplicate channel ID"},
+		{name: "too many", channelID: 1, fallbackIDs: `[2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22]`, errorMessage: "cannot contain more than"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rawSetting := `{"fallback_channel_ids":` + tt.fallbackIDs + `}`
+			channel := Channel{Id: tt.channelID, Setting: &rawSetting}
+			require.ErrorContains(t, channel.ValidateSettings(), tt.errorMessage)
+		})
+	}
+}
+
+func TestChannelHasEnabledKey(t *testing.T) {
+	tests := []struct {
+		name    string
+		channel Channel
+		want    bool
+	}{
+		{name: "single key", channel: Channel{Id: 1, Key: "sk-test"}, want: true},
+		{name: "blank single key", channel: Channel{Id: 2, Key: "  "}, want: false},
+		{
+			name: "multi key with one enabled",
+			channel: Channel{
+				Id:  3,
+				Key: "sk-disabled\nsk-enabled",
+				ChannelInfo: ChannelInfo{
+					IsMultiKey:         true,
+					MultiKeyStatusList: map[int]int{0: common.ChannelStatusManuallyDisabled},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "multi key all disabled",
+			channel: Channel{
+				Id:  4,
+				Key: "sk-one\nsk-two",
+				ChannelInfo: ChannelInfo{
+					IsMultiKey: true,
+					MultiKeyStatusList: map[int]int{
+						0: common.ChannelStatusManuallyDisabled,
+						1: common.ChannelStatusAutoDisabled,
+					},
+				},
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, tt.channel.HasEnabledKey())
+		})
+	}
 }

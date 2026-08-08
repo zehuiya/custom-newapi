@@ -239,6 +239,20 @@ type Usage struct {
 
 	// OpenRouter Params
 	Cost any `json:"cost,omitempty"`
+
+	// Internal state used to keep percentage-based cache adjustment idempotent
+	// when streaming providers report or merge usage more than once.
+	CacheReductionState *CacheReductionUsageState `json:"-"`
+}
+
+type CacheReductionUsageState struct {
+	Percentage              int
+	OriginalPromptTokens    int
+	OriginalInputTokens     int
+	OriginalCacheReadTokens int
+	AdjustedPromptTokens    int
+	AdjustedInputTokens     int
+	AdjustedCacheReadTokens int
 }
 
 type OpenAIVideoResponse struct {

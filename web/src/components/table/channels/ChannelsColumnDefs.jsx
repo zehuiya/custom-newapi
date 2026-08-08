@@ -281,6 +281,7 @@ const isRequestPassThroughEnabled = (record) =>
 const getCacheUsageMeta = (record) => {
   const settings = parseChannelSettings(record);
   const noCacheEnabled = settings.no_cache_enabled === true;
+  const cacheReductionEnabled = settings.cache_reduction_enabled === true;
   const normalizePercentage = (value, fallback) => {
     const parsed = Number(value ?? fallback);
     return Number.isInteger(parsed) && parsed >= 0 && parsed <= 100
@@ -296,8 +297,16 @@ const getCacheUsageMeta = (record) => {
   }
 
   return {
-    cacheEnabled: settings.cache_enabled === true && !noCacheEnabled,
+    cacheEnabled:
+      settings.cache_enabled === true &&
+      !noCacheEnabled &&
+      !cacheReductionEnabled,
     noCacheEnabled,
+    cacheReductionEnabled,
+    cacheReductionPercentage: normalizePercentage(
+      settings.cache_reduction_percentage,
+      10,
+    ),
     percentageMin,
     percentageMax,
   };
@@ -416,7 +425,8 @@ export const getChannelsColumns = ({
           !passThroughEnabled &&
           !showUpstreamUpdateTag &&
           !cacheUsageMeta.cacheEnabled &&
-          !cacheUsageMeta.noCacheEnabled
+          !cacheUsageMeta.noCacheEnabled &&
+          !cacheUsageMeta.cacheReductionEnabled
         ) {
           return nameNode;
         }
@@ -448,6 +458,20 @@ export const getChannelsColumns = ({
               >
                 <Tag color='orange' type='light' size='small' shape='circle'>
                   {t('无缓存计费')}
+                </Tag>
+              </Tooltip>
+            )}
+            {cacheUsageMeta.cacheReductionEnabled && (
+              <Tooltip
+                content={t(
+                  '按配置百分比将缓存读取 tokens 转为普通输入 tokens。',
+                )}
+                position='top'
+              >
+                <Tag color='blue' type='light' size='small' shape='circle'>
+                  {t('减少缓存 {{percentage}}%', {
+                    percentage: cacheUsageMeta.cacheReductionPercentage,
+                  })}
                 </Tag>
               </Tooltip>
             )}
