@@ -14,12 +14,14 @@ import (
 )
 
 type RetryParam struct {
-	Ctx          *gin.Context
-	TokenGroup   string
-	ModelName    string
-	Retry        *int
-	TokenLimit   *model.ChannelTokenLimit
-	resetNextTry bool
+	Ctx                 *gin.Context
+	TokenGroup          string
+	ModelName           string
+	Retry               *int
+	TokenLimit          *model.ChannelTokenLimit
+	RequireResponses    bool
+	resetNextTry        bool
+	selectionConstraint model.ChannelSelectionConstraint
 
 	firstChannelID     int
 	fallbackChannelIDs []int
@@ -42,6 +44,15 @@ func (p *RetryParam) GetRetry() int {
 		return 0
 	}
 	return *p.Retry
+}
+
+func (p *RetryParam) GetSelectionConstraint() *model.ChannelSelectionConstraint {
+	if p == nil || p.TokenLimit == nil && !p.RequireResponses {
+		return nil
+	}
+	p.selectionConstraint.TokenLimit = p.TokenLimit
+	p.selectionConstraint.RequireResponses = p.RequireResponses
+	return &p.selectionConstraint
 }
 
 func (p *RetryParam) SetRetry(retry int) {
@@ -152,8 +163,8 @@ func CacheGetFallbackSatisfiedChannel(param *RetryParam, channelID int) (*model.
 	if !model.IsChannelEnabledForGroupModel(param.GetFallbackGroup(), param.ModelName, channelID) {
 		return nil, fmt.Errorf("fallback channel #%d is unavailable for group %s and model %s", channelID, param.GetFallbackGroup(), param.ModelName)
 	}
-	if !param.TokenLimit.Satisfies(channel) {
-		return nil, fmt.Errorf("fallback channel #%d does not satisfy token limits", channelID)
+	if !param.GetSelectionConstraint().Satisfies(channel) {
+		return nil, fmt.Errorf("fallback channel #%d does not satisfy request constraints", channelID)
 	}
 	if !channel.HasEnabledKey() {
 		return nil, fmt.Errorf("fallback channel #%d has no enabled key", channelID)
@@ -258,7 +269,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			}
 			logger.LogDebug(param.Ctx, "Auto selecting group: %s, priorityRetry: %d", autoGroup, priorityRetry)
 
-			channel, _ = model.GetRandomSatisfiedChannelWithTokenLimit(autoGroup, param.ModelName, priorityRetry, param.TokenLimit)
+			channel, _ = model.GetRandomSatisfiedChannelWithSelectionConstraint(autoGroup, param.ModelName, priorityRetry, param.GetSelectionConstraint())
 			if channel == nil {
 				// Current group has no available channel for this model, try next group
 				// 当前分组没有该模型的可用渠道，尝试下一个分组
@@ -296,7 +307,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			break
 		}
 	} else {
-		channel, err = model.GetRandomSatisfiedChannelWithTokenLimit(param.TokenGroup, param.ModelName, param.GetRetry(), param.TokenLimit)
+		channel, err = model.GetRandomSatisfiedChannelWithSelectionConstraint(param.TokenGroup, param.ModelName, param.GetRetry(), param.GetSelectionConstraint())
 		if err != nil {
 			return nil, param.TokenGroup, err
 		}

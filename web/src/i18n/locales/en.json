@@ -4002,6 +4002,10 @@
     "未配置时保持原有重试流程": "Uses the existing retry flow when not configured",
     "获取兜底渠道列表失败": "Failed to load fallback channels",
     "上移": "Move up",
-    "下移": "Move down"
+    "下移": "Move down",
+    "支持 /v1/responses": "Support /v1/responses",
+    "关闭后，/v1/responses 请求不会调度到此渠道；未配置时默认支持": "When disabled, /v1/responses requests will not be routed to this channel. Existing channels are supported by default.",
+    "/v1/responses 请求不会调度到该渠道；其他接口不受影响。": "/v1/responses requests will not be routed to this channel; other endpoints are unaffected.",
+    "不支持 Responses": "Responses disabled"
   }
 }

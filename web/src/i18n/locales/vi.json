@@ -4260,6 +4260,10 @@
     "未配置时保持原有重试流程": "Giữ nguyên quy trình thử lại hiện tại khi chưa cấu hình",
     "获取兜底渠道列表失败": "Không thể tải danh sách kênh dự phòng",
     "上移": "Di chuyển lên",
-    "下移": "Di chuyển xuống"
+    "下移": "Di chuyển xuống",
+    "支持 /v1/responses": "Hỗ trợ /v1/responses",
+    "关闭后，/v1/responses 请求不会调度到此渠道；未配置时默认支持": "Khi tắt, yêu cầu /v1/responses sẽ không được định tuyến đến kênh này. Các kênh hiện có được hỗ trợ theo mặc định.",
+    "/v1/responses 请求不会调度到该渠道；其他接口不受影响。": "Yêu cầu /v1/responses sẽ không được định tuyến đến kênh này; các giao diện khác không bị ảnh hưởng.",
+    "不支持 Responses": "Đã tắt Responses"
   }
 }

@@ -13,6 +13,7 @@ type ChannelSettings struct {
 	CacheReductionEnabled    bool   `json:"cache_reduction_enabled,omitempty"`
 	CacheReductionPercentage *int   `json:"cache_reduction_percentage,omitempty"`
 	FallbackChannelIDs       []int  `json:"fallback_channel_ids,omitempty"`
+	ResponsesEnabled         *bool  `json:"responses_enabled,omitempty"`
 }
 
 const (
@@ -46,6 +47,12 @@ func (s ChannelSettings) GetCacheReductionPercentage() int {
 		return DefaultCacheReductionPercentage
 	}
 	return *s.CacheReductionPercentage
+}
+
+// SupportsResponses preserves compatibility for channels created before the
+// setting existed. Only an explicit false disables /v1/responses scheduling.
+func (s ChannelSettings) SupportsResponses() bool {
+	return s.ResponsesEnabled == nil || *s.ResponsesEnabled
 }
 
 type VertexKeyType string

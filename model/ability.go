@@ -124,8 +124,15 @@ func GetChannel(group string, model string, retry int) (*Channel, error) {
 }
 
 func GetChannelWithTokenLimit(group string, model string, retry int, tokenLimit *ChannelTokenLimit) (*Channel, error) {
-	if tokenLimit != nil {
-		return getChannelWithTokenLimitDB(group, model, retry, tokenLimit)
+	if tokenLimit == nil {
+		return GetChannelWithSelectionConstraint(group, model, retry, nil)
+	}
+	return GetChannelWithSelectionConstraint(group, model, retry, &ChannelSelectionConstraint{TokenLimit: tokenLimit})
+}
+
+func GetChannelWithSelectionConstraint(group string, model string, retry int, constraint *ChannelSelectionConstraint) (*Channel, error) {
+	if constraint != nil {
+		return getChannelWithSelectionConstraintDB(group, model, retry, constraint)
 	}
 	var abilities []Ability
 
@@ -166,7 +173,7 @@ func GetChannelWithTokenLimit(group string, model string, retry int, tokenLimit 
 	return &channel, err
 }
 
-func getChannelWithTokenLimitDB(group string, model string, retry int, tokenLimit *ChannelTokenLimit) (*Channel, error) {
+func getChannelWithSelectionConstraintDB(group string, model string, retry int, constraint *ChannelSelectionConstraint) (*Channel, error) {
 	priorities, err := getPrioritiesForChannel(group, model)
 	if err != nil {
 		return nil, err
@@ -212,7 +219,7 @@ func getChannelWithTokenLimitDB(group string, model string, retry int, tokenLimi
 			if !ok {
 				return nil, fmt.Errorf("channel #%d does not exist", ability.ChannelId)
 			}
-			if !tokenLimit.Satisfies(channel) {
+			if !constraint.Satisfies(channel) {
 				continue
 			}
 			candidates = append(candidates, candidate{

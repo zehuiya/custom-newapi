@@ -196,6 +196,21 @@ func TestGetSettingCacheReductionPercentageDefaultsAndPreservesZero(t *testing.T
 	require.Zero(t, zeroSetting.GetCacheReductionPercentage())
 }
 
+func TestChannelSettingsSupportsResponsesDefaultsToEnabled(t *testing.T) {
+	legacySetting := (&Channel{}).GetSetting()
+	require.True(t, legacySetting.SupportsResponses())
+
+	enabledRawSetting := `{"responses_enabled":true}`
+	enabledSetting := (&Channel{Setting: &enabledRawSetting}).GetSetting()
+	require.NotNil(t, enabledSetting.ResponsesEnabled)
+	require.True(t, enabledSetting.SupportsResponses())
+
+	disabledRawSetting := `{"responses_enabled":false}`
+	disabledSetting := (&Channel{Setting: &disabledRawSetting}).GetSetting()
+	require.NotNil(t, disabledSetting.ResponsesEnabled)
+	require.False(t, disabledSetting.SupportsResponses())
+}
+
 func TestValidateSettingsAcceptsOrderedFallbackChannels(t *testing.T) {
 	rawSetting := `{"fallback_channel_ids":[2,3,5]}`
 	channel := Channel{Id: 1, Setting: &rawSetting}

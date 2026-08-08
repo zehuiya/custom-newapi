@@ -5,6 +5,11 @@ type ChannelTokenLimit struct {
 	MaxTokens   int
 }
 
+type ChannelSelectionConstraint struct {
+	TokenLimit       *ChannelTokenLimit
+	RequireResponses bool
+}
+
 func (limit *ChannelTokenLimit) Satisfies(channel *Channel) bool {
 	if limit == nil || channel == nil {
 		return true
@@ -19,6 +24,19 @@ func (limit *ChannelTokenLimit) Satisfies(channel *Channel) bool {
 		return false
 	}
 	if maxContextTokens := channel.GetMaxContextTokens(); maxContextTokens > 0 && limit.InputTokens+limit.MaxTokens >= maxContextTokens {
+		return false
+	}
+	return true
+}
+
+func (constraint *ChannelSelectionConstraint) Satisfies(channel *Channel) bool {
+	if constraint == nil || channel == nil {
+		return true
+	}
+	if !constraint.TokenLimit.Satisfies(channel) {
+		return false
+	}
+	if constraint.RequireResponses && !channel.GetSetting().SupportsResponses() {
 		return false
 	}
 	return true

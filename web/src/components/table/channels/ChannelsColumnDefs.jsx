@@ -278,6 +278,9 @@ const parseChannelSettings = (record) => {
 const isRequestPassThroughEnabled = (record) =>
   parseChannelSettings(record).pass_through_body_enabled === true;
 
+const isResponsesDisabled = (record) =>
+  parseChannelSettings(record).responses_enabled === false;
+
 const getCacheUsageMeta = (record) => {
   const settings = parseChannelSettings(record);
   const noCacheEnabled = settings.no_cache_enabled === true;
@@ -377,6 +380,7 @@ export const getChannelsColumns = ({
       dataIndex: 'name',
       render: (text, record, index) => {
         const passThroughEnabled = isRequestPassThroughEnabled(record);
+        const responsesDisabled = isResponsesDisabled(record);
         const cacheUsageMeta = getCacheUsageMeta(record);
         const upstreamUpdateMeta = getUpstreamUpdateMeta(record);
         const pendingAddCount = upstreamUpdateMeta.pendingAddModels.length;
@@ -423,6 +427,7 @@ export const getChannelsColumns = ({
 
         if (
           !passThroughEnabled &&
+          !responsesDisabled &&
           !showUpstreamUpdateTag &&
           !cacheUsageMeta.cacheEnabled &&
           !cacheUsageMeta.noCacheEnabled &&
@@ -472,6 +477,18 @@ export const getChannelsColumns = ({
                   {t('减少缓存 {{percentage}}%', {
                     percentage: cacheUsageMeta.cacheReductionPercentage,
                   })}
+                </Tag>
+              </Tooltip>
+            )}
+            {responsesDisabled && (
+              <Tooltip
+                content={t(
+                  '/v1/responses 请求不会调度到该渠道；其他接口不受影响。',
+                )}
+                position='top'
+              >
+                <Tag color='red' type='light' size='small' shape='circle'>
+                  {t('不支持 Responses')}
                 </Tag>
               </Tooltip>
             )}

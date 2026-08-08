@@ -3730,6 +3730,10 @@
     "未配置时保持原有重试流程": "Conserve le flux de nouvelle tentative existant si non configuré",
     "获取兜底渠道列表失败": "Échec du chargement des canaux de secours",
     "上移": "Monter",
-    "下移": "Descendre"
+    "下移": "Descendre",
+    "支持 /v1/responses": "Prendre en charge /v1/responses",
+    "关闭后，/v1/responses 请求不会调度到此渠道；未配置时默认支持": "Si cette option est désactivée, les requêtes /v1/responses ne seront pas acheminées vers ce canal. Les canaux existants sont pris en charge par défaut.",
+    "/v1/responses 请求不会调度到该渠道；其他接口不受影响。": "Les requêtes /v1/responses ne seront pas acheminées vers ce canal ; les autres interfaces ne sont pas affectées.",
+    "不支持 Responses": "Responses désactivé"
   }
 }

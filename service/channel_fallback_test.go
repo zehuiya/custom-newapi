@@ -4,8 +4,21 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/stretchr/testify/require"
 )
+
+func TestRetryParamBuildsIndependentResponsesAndTokenConstraints(t *testing.T) {
+	retryParam := &RetryParam{RequireResponses: true}
+	constraint := retryParam.GetSelectionConstraint()
+	require.NotNil(t, constraint)
+	require.True(t, constraint.RequireResponses)
+	require.Nil(t, constraint.TokenLimit)
+
+	retryParam.TokenLimit = &model.ChannelTokenLimit{InputTokens: 100, MaxTokens: 20}
+	constraint = retryParam.GetSelectionConstraint()
+	require.Equal(t, retryParam.TokenLimit, constraint.TokenLimit)
+}
 
 func TestRetryParamFallbackOrderThenOriginalRetry(t *testing.T) {
 	retryParam := &RetryParam{Retry: common.GetPointer(0)}

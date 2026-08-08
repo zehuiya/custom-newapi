@@ -219,10 +219,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}()
 
 	retryParam := &service.RetryParam{
-		Ctx:        c,
-		TokenGroup: relayInfo.TokenGroup,
-		ModelName:  relayInfo.OriginModelName,
-		Retry:      common.GetPointer(0),
+		Ctx:              c,
+		TokenGroup:       relayInfo.TokenGroup,
+		ModelName:        relayInfo.OriginModelName,
+		Retry:            common.GetPointer(0),
+		RequireResponses: relayInfo.RelayMode == relayconstant.RelayModeResponses,
 		TokenLimit: &model.ChannelTokenLimit{
 			InputTokens: tokenLimitInputTokens,
 			MaxTokens:   meta.MaxTokens,
@@ -410,7 +411,11 @@ func ensureSelectedChannelSatisfiesTokenLimit(c *gin.Context, info *relaycommon.
 		InputTokens: inputTokens,
 		MaxTokens:   maxTokens,
 	}
-	if tokenLimit.Satisfies(channel) {
+	constraint := &model.ChannelSelectionConstraint{
+		TokenLimit:       tokenLimit,
+		RequireResponses: info.RelayMode == relayconstant.RelayModeResponses,
+	}
+	if constraint.Satisfies(channel) {
 		return nil
 	}
 
@@ -425,11 +430,12 @@ func ensureSelectedChannelSatisfiesTokenLimit(c *gin.Context, info *relaycommon.
 	}
 
 	retryParam := &service.RetryParam{
-		Ctx:        c,
-		TokenGroup: info.TokenGroup,
-		ModelName:  info.OriginModelName,
-		Retry:      common.GetPointer(0),
-		TokenLimit: tokenLimit,
+		Ctx:              c,
+		TokenGroup:       info.TokenGroup,
+		ModelName:        info.OriginModelName,
+		Retry:            common.GetPointer(0),
+		TokenLimit:       tokenLimit,
+		RequireResponses: info.RelayMode == relayconstant.RelayModeResponses,
 	}
 	selected, selectGroup, err := service.CacheGetRandomSatisfiedChannel(retryParam)
 	if err != nil {

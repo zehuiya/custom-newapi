@@ -36,6 +36,19 @@ func TestChannelTokenLimitSatisfies(t *testing.T) {
 	require.False(t, limit.Satisfies(&Channel{MaxInputTokens: intPtr(99)}))
 }
 
+func TestChannelSelectionConstraintRequiresResponsesWithoutApplyingUnknownTokenLimits(t *testing.T) {
+	disabledSetting := `{"responses_enabled":false}`
+	legacyChannel := &Channel{MinInputTokens: intPtr(100)}
+	disabledChannel := &Channel{Setting: &disabledSetting}
+
+	constraint := &ChannelSelectionConstraint{RequireResponses: true}
+	require.True(t, constraint.Satisfies(legacyChannel))
+	require.False(t, constraint.Satisfies(disabledChannel))
+
+	constraint.TokenLimit = &ChannelTokenLimit{InputTokens: 10, MaxTokens: 10}
+	require.False(t, constraint.Satisfies(legacyChannel))
+}
+
 func TestGetRandomSatisfiedChannelWithTokenLimitSkipsInvalidPriority(t *testing.T) {
 	oldMemoryCacheEnabled := common.MemoryCacheEnabled
 	oldGroup2Model2Channels := group2model2channels
@@ -91,6 +104,36 @@ func TestGetRandomSatisfiedChannelWithTokenLimitSkipsInvalidPriority(t *testing.
 		InputTokens: 201,
 		MaxTokens:   20,
 	})
+	require.NoError(t, err)
+	require.NotNil(t, channel)
+	require.Equal(t, 2, channel.Id)
+}
+
+func TestGetRandomSatisfiedChannelWithSelectionConstraintSkipsResponsesDisabledChannel(t *testing.T) {
+	oldMemoryCacheEnabled := common.MemoryCacheEnabled
+	oldGroup2Model2Channels := group2model2channels
+	oldChannelsIDM := channelsIDM
+	defer func() {
+		common.MemoryCacheEnabled = oldMemoryCacheEnabled
+		group2model2channels = oldGroup2Model2Channels
+		channelsIDM = oldChannelsIDM
+	}()
+
+	disabledSetting := `{"responses_enabled":false}`
+	common.MemoryCacheEnabled = true
+	group2model2channels = map[string]map[string][]int{
+		"default": {"responses-model": {1, 2}},
+	}
+	channelsIDM = map[int]*Channel{
+		1: {Id: 1, Priority: int64Ptr(100), Weight: uintPtr(1000), Setting: &disabledSetting},
+		2: {Id: 2, Priority: int64Ptr(50), Weight: uintPtr(1)},
+	}
+
+	channel, err := GetRandomSatisfiedChannel("default", "responses-model", 0)
+	require.NoError(t, err)
+	require.Equal(t, 1, channel.Id, "other endpoints keep the original selection behavior")
+
+	channel, err = GetRandomSatisfiedChannelWithSelectionConstraint("default", "responses-model", 0, &ChannelSelectionConstraint{RequireResponses: true})
 	require.NoError(t, err)
 	require.NotNil(t, channel)
 	require.Equal(t, 2, channel.Id)

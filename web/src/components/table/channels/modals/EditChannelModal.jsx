@@ -188,6 +188,11 @@ const CHANNEL_CHANGE_FIELDS = [
     label: '透传请求体',
     valueType: 'boolean',
   },
+  {
+    key: 'responses_enabled',
+    label: '支持 /v1/responses',
+    valueType: 'boolean',
+  },
   { key: 'proxy', label: '代理地址', sensitive: true },
   { key: 'system_prompt', label: '系统提示词' },
   {
@@ -518,6 +523,7 @@ const EditChannelModal = (props) => {
     force_format: false,
     proxy: '',
     pass_through_body_enabled: false,
+    responses_enabled: true,
     system_prompt: '',
     system_prompt_override: false,
     cache_enabled: false,
@@ -1194,6 +1200,7 @@ const EditChannelModal = (props) => {
           data.proxy = parsedSettings.proxy || '';
           data.pass_through_body_enabled =
             parsedSettings.pass_through_body_enabled || false;
+          data.responses_enabled = parsedSettings.responses_enabled !== false;
           data.system_prompt = parsedSettings.system_prompt || '';
           data.system_prompt_override =
             parsedSettings.system_prompt_override || false;
@@ -1230,6 +1237,7 @@ const EditChannelModal = (props) => {
           data.force_format = false;
           data.proxy = '';
           data.pass_through_body_enabled = false;
+          data.responses_enabled = true;
           data.system_prompt = '';
           data.system_prompt_override = false;
           data.cache_enabled = false;
@@ -1244,6 +1252,7 @@ const EditChannelModal = (props) => {
         data.force_format = false;
         data.proxy = '';
         data.pass_through_body_enabled = false;
+        data.responses_enabled = true;
         data.system_prompt = '';
         data.system_prompt_override = false;
         data.cache_enabled = false;
@@ -1402,6 +1411,7 @@ const EditChannelModal = (props) => {
         (data.proxy && data.proxy.trim()) ||
         (data.system_prompt && data.system_prompt.trim()) ||
         data.pass_through_body_enabled ||
+        data.responses_enabled === false ||
         data.force_format ||
         data.cache_enabled ||
         data.no_cache_enabled ||
@@ -2248,6 +2258,7 @@ const EditChannelModal = (props) => {
       force_format: localInputs.force_format || false,
       proxy: localInputs.proxy || '',
       pass_through_body_enabled: localInputs.pass_through_body_enabled || false,
+      responses_enabled: localInputs.responses_enabled !== false,
       system_prompt: localInputs.system_prompt || '',
       system_prompt_override: localInputs.system_prompt_override || false,
       cache_enabled: localInputs.cache_enabled === true,
@@ -2349,6 +2360,7 @@ const EditChannelModal = (props) => {
     delete localInputs.force_format;
     delete localInputs.proxy;
     delete localInputs.pass_through_body_enabled;
+    delete localInputs.responses_enabled;
     delete localInputs.system_prompt;
     delete localInputs.system_prompt_override;
     delete localInputs.cache_enabled;
@@ -3392,6 +3404,19 @@ const EditChannelModal = (props) => {
                     }
                     extraText={t(
                       '请求 input_tokens 大于该值时跳过此渠道，0 表示不限制',
+                    )}
+                  />
+
+                  <Form.Switch
+                    field='responses_enabled'
+                    label={t('支持 /v1/responses')}
+                    checkedText={t('是')}
+                    uncheckedText={t('否')}
+                    onChange={(value) =>
+                      handleChannelSettingsChange('responses_enabled', value)
+                    }
+                    extraText={t(
+                      '关闭后，/v1/responses 请求不会调度到此渠道；未配置时默认支持',
                     )}
                   />
 

@@ -98,9 +98,16 @@ func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel,
 }
 
 func GetRandomSatisfiedChannelWithTokenLimit(group string, model string, retry int, tokenLimit *ChannelTokenLimit) (*Channel, error) {
+	if tokenLimit == nil {
+		return GetRandomSatisfiedChannelWithSelectionConstraint(group, model, retry, nil)
+	}
+	return GetRandomSatisfiedChannelWithSelectionConstraint(group, model, retry, &ChannelSelectionConstraint{TokenLimit: tokenLimit})
+}
+
+func GetRandomSatisfiedChannelWithSelectionConstraint(group string, model string, retry int, constraint *ChannelSelectionConstraint) (*Channel, error) {
 	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {
-		return GetChannelWithTokenLimit(group, model, retry, tokenLimit)
+		return GetChannelWithSelectionConstraint(group, model, retry, constraint)
 	}
 
 	channelSyncLock.RLock()
@@ -121,7 +128,7 @@ func GetRandomSatisfiedChannelWithTokenLimit(group string, model string, retry i
 
 	if len(channels) == 1 {
 		if channel, ok := channelsIDM[channels[0]]; ok {
-			if !tokenLimit.Satisfies(channel) {
+			if !constraint.Satisfies(channel) {
 				return nil, nil
 			}
 			return channel, nil
@@ -154,7 +161,7 @@ func GetRandomSatisfiedChannelWithTokenLimit(group string, model string, retry i
 		var targetChannels []*Channel
 		for _, channelId := range channels {
 			if channel, ok := channelsIDM[channelId]; ok {
-				if channel.GetPriority() == targetPriority && tokenLimit.Satisfies(channel) {
+				if channel.GetPriority() == targetPriority && constraint.Satisfies(channel) {
 					sumWeight += channel.GetWeight()
 					targetChannels = append(targetChannels, channel)
 				}
@@ -164,7 +171,7 @@ func GetRandomSatisfiedChannelWithTokenLimit(group string, model string, retry i
 		}
 
 		if len(targetChannels) == 0 {
-			if tokenLimit != nil {
+			if constraint != nil {
 				continue
 			}
 			return nil, errors.New(fmt.Sprintf("no channel found, group: %s, model: %s, priority: %d", group, model, targetPriority))
