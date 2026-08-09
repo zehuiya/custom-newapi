@@ -171,6 +171,53 @@ func TestSanitizeStreamBodyCompactsAnthropicToolUse(t *testing.T) {
 	require.Contains(t, sanitized, "done: true")
 }
 
+func TestSanitizeStreamBodyCompactsOpenAIResponses(t *testing.T) {
+	body := []byte(
+		"event: response.created\n" +
+			`data: {"type":"response.created","response":{"id":"resp_1","status":"in_progress"}}` + "\n\n" +
+			"event: response.reasoning_summary_text.delta\n" +
+			`data: {"type":"response.reasoning_summary_text.delta","delta":"plan "}` + "\n\n" +
+			"event: response.reasoning_summary_text.delta\n" +
+			`data: {"type":"response.reasoning_summary_text.delta","delta":"carefully"}` + "\n\n" +
+			"event: response.output_text.delta\n" +
+			`data: {"type":"response.output_text.delta","delta":"hello "}` + "\n\n" +
+			"event: response.output_text.delta\n" +
+			`data: {"type":"response.output_text.delta","delta":"world"}` + "\n\n" +
+			"event: response.output_item.added\n" +
+			`data: {"type":"response.output_item.added","item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"search","arguments":""}}` + "\n\n" +
+			"event: response.function_call_arguments.delta\n" +
+			`data: {"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":"{\"q\":\"test\"}"}` + "\n\n" +
+			"event: response.completed\n" +
+			`data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","usage":{"input_tokens":12,"output_tokens":8,"total_tokens":20}}}` + "\n\n")
+
+	sanitized := sanitizeStreamBody(body).(string)
+	require.Contains(t, sanitized, "reasoning_content: plan carefully")
+	require.Contains(t, sanitized, "content: hello world")
+	require.Contains(t, sanitized, "tool_call:")
+	require.Contains(t, sanitized, "call_1")
+	require.Contains(t, sanitized, "search")
+	require.Contains(t, sanitized, `{"q":"test"}`)
+	require.Contains(t, sanitized, "usage:")
+	require.Contains(t, sanitized, `"input_tokens":12`)
+	require.Contains(t, sanitized, "response_status: completed")
+	require.Contains(t, sanitized, "chunk_count: 8")
+	require.Contains(t, sanitized, "done: true")
+}
+
+func TestSanitizeStreamBodyUsesCompletedResponsesPayloadAsFallback(t *testing.T) {
+	body := []byte("event: response.completed\n" +
+		`data: {"type":"response.completed","response":{"status":"completed","output":[{"type":"reasoning","summary":[{"type":"summary_text","text":"fallback reasoning"}]},{"type":"message","content":[{"type":"output_text","text":"fallback answer"}]},{"type":"function_call","call_id":"call_2","name":"lookup","arguments":"{\"id\":2}"}],"usage":{"input_tokens":4,"output_tokens":6,"total_tokens":10}}}` + "\n\n")
+
+	sanitized := sanitizeStreamBody(body).(string)
+	require.Contains(t, sanitized, "reasoning_content: fallback reasoning")
+	require.Contains(t, sanitized, "content: fallback answer")
+	require.Contains(t, sanitized, "tool_call:")
+	require.Contains(t, sanitized, "call_2")
+	require.Contains(t, sanitized, "lookup")
+	require.Contains(t, sanitized, "response_status: completed")
+	require.Contains(t, sanitized, "done: true")
+}
+
 func TestNormalizeConfigClampsSampleRate(t *testing.T) {
 	cfg := Config{SampleRate: 2}
 	normalizeConfig(&cfg)

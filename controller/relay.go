@@ -356,6 +356,8 @@ func shouldCaptureRelayPayload(relayFormat types.RelayFormat, info *relaycommon.
 		return true
 	case types.RelayFormatOpenAI:
 		return info.RelayMode == relayconstant.RelayModeChatCompletions || info.RelayMode == relayconstant.RelayModeCompletions
+	case types.RelayFormatOpenAIResponses:
+		return info.RelayMode == relayconstant.RelayModeResponses
 	default:
 		return false
 	}
@@ -365,7 +367,7 @@ func relayPayloadLogProtocol(relayFormat types.RelayFormat) string {
 	switch relayFormat {
 	case types.RelayFormatClaude:
 		return relaypayloadlog.ProtocolAnthropic
-	case types.RelayFormatOpenAI:
+	case types.RelayFormatOpenAI, types.RelayFormatOpenAIResponses:
 		return relaypayloadlog.ProtocolOpenAI
 	default:
 		return ""

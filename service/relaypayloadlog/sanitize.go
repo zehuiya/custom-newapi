@@ -78,6 +78,7 @@ type streamSummary struct {
 	usage            string
 	finishReason     string
 	stopReason       string
+	responseStatus   string
 	chunkCount       int
 	parseErrors      int
 	done             bool
@@ -111,6 +112,7 @@ func (s *streamSummary) addPayload(event string, payload string) {
 		return
 	}
 	s.addOpenAI(m)
+	s.addOpenAIResponses(m)
 	s.addAnthropic(event, m)
 }
 
@@ -148,6 +150,153 @@ func (s *streamSummary) addOpenAI(m map[string]any) {
 		if toolCalls, ok := sliceValue(delta["tool_calls"]); ok {
 			appendStreamPart(&s.toolCall, stringifyStreamValue(toolCalls, "tool_calls"))
 		}
+	}
+}
+
+func (s *streamSummary) addOpenAIResponses(m map[string]any) {
+	typ, _ := stringMapValue(m, "type")
+	if !strings.HasPrefix(typ, "response.") {
+		return
+	}
+
+	switch typ {
+	case "response.reasoning_text.delta", "response.reasoning_summary_text.delta":
+		if delta, ok := stringMapValue(m, "delta"); ok {
+			s.reasoningContent.WriteString(delta)
+		}
+	case "response.reasoning_text.done", "response.reasoning_summary_text.done":
+		if s.reasoningContent.Len() == 0 {
+			if text, ok := stringMapValue(m, "text"); ok {
+				s.reasoningContent.WriteString(text)
+			}
+		}
+	case "response.reasoning_summary_part.added", "response.reasoning_summary_part.done":
+		if s.reasoningContent.Len() == 0 {
+			s.appendResponsesReasoningPart(m["part"])
+		}
+	case "response.output_text.delta":
+		if delta, ok := stringMapValue(m, "delta"); ok {
+			s.content.WriteString(delta)
+		}
+	case "response.output_text.done":
+		if s.content.Len() == 0 {
+			if text, ok := stringMapValue(m, "text"); ok {
+				s.content.WriteString(text)
+			}
+		}
+	case "response.output_item.added":
+		s.appendResponsesToolItem(m["item"])
+	case "response.output_item.done":
+		if s.toolCall.Len() == 0 {
+			s.appendResponsesToolItem(m["item"])
+		}
+	case "response.function_call_arguments.delta":
+		if delta, ok := stringMapValue(m, "delta"); ok {
+			s.toolCall.WriteString(delta)
+		}
+	case "response.function_call_arguments.done":
+		if s.toolCall.Len() == 0 {
+			if arguments, ok := stringMapValue(m, "arguments"); ok {
+				s.toolCall.WriteString(arguments)
+			}
+		}
+	case "response.completed", "response.incomplete", "response.failed", "response.error":
+		s.done = true
+		s.addOpenAIResponsesFinal(m)
+	}
+}
+
+func (s *streamSummary) appendResponsesReasoningPart(value any) {
+	part, ok := mapValue(value)
+	if !ok {
+		return
+	}
+	if text, ok := stringMapValue(part, "text"); ok {
+		s.reasoningContent.WriteString(text)
+	}
+}
+
+func (s *streamSummary) appendResponsesToolItem(value any) {
+	item, ok := mapValue(value)
+	if !ok {
+		return
+	}
+	itemType, _ := stringMapValue(item, "type")
+	if itemType != "function_call" {
+		return
+	}
+	tool := make(map[string]any, 4)
+	for _, key := range []string{"id", "call_id", "name", "arguments"} {
+		if field, exists := item[key]; exists && field != nil && field != "" {
+			tool[key] = field
+		}
+	}
+	if len(tool) > 0 {
+		appendStreamPart(&s.toolCall, stringifyStreamValue(tool, "tool_call"))
+	}
+}
+
+func (s *streamSummary) addOpenAIResponsesFinal(m map[string]any) {
+	response, ok := mapValue(m["response"])
+	if !ok {
+		return
+	}
+	if status, ok := stringMapValue(response, "status"); ok {
+		s.responseStatus = status
+	}
+	if usage, exists := response["usage"]; exists && usage != nil {
+		s.usage = stringifyStreamValue(usage, "usage")
+	}
+	outputs, ok := sliceValue(response["output"])
+	if !ok {
+		return
+	}
+	for _, outputValue := range outputs {
+		output, ok := mapValue(outputValue)
+		if !ok {
+			continue
+		}
+		outputType, _ := stringMapValue(output, "type")
+		switch outputType {
+		case "message":
+			if s.content.Len() == 0 {
+				s.appendResponsesOutputContent(output["content"])
+			}
+		case "reasoning":
+			if s.reasoningContent.Len() == 0 {
+				s.appendResponsesReasoningSummary(output["summary"])
+			}
+		case "function_call":
+			if s.toolCall.Len() == 0 {
+				s.appendResponsesToolItem(output)
+			}
+		}
+	}
+}
+
+func (s *streamSummary) appendResponsesOutputContent(value any) {
+	content, ok := sliceValue(value)
+	if !ok {
+		return
+	}
+	for _, partValue := range content {
+		part, ok := mapValue(partValue)
+		if !ok {
+			continue
+		}
+		if text, ok := stringMapValue(part, "text"); ok {
+			s.content.WriteString(text)
+		}
+	}
+}
+
+func (s *streamSummary) appendResponsesReasoningSummary(value any) {
+	parts, ok := sliceValue(value)
+	if !ok {
+		return
+	}
+	for _, part := range parts {
+		s.appendResponsesReasoningPart(part)
 	}
 }
 
@@ -248,6 +397,9 @@ func (s *streamSummary) String() string {
 	}
 	if s.stopReason != "" {
 		parts = append(parts, "stop_reason: "+s.stopReason)
+	}
+	if s.responseStatus != "" {
+		parts = append(parts, "response_status: "+s.responseStatus)
 	}
 	parts = append(parts, fmt.Sprintf("chunk_count: %d", s.chunkCount))
 	parts = append(parts, fmt.Sprintf("done: %t", s.done))
