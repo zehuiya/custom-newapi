@@ -3,6 +3,7 @@ package channel
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -190,4 +191,22 @@ func TestProcessHeaderOverride_PassHeadersTemplateSetsRuntimeHeaders(t *testing.
 	require.Equal(t, "Codex CLI", upstreamReq.Header.Get("Originator"))
 	require.Equal(t, "sess-123", upstreamReq.Header.Get("Session_id"))
 	require.Empty(t, upstreamReq.Header.Get("X-Codex-Beta-Features"))
+}
+
+func TestApplyRuntimeHeaderDeletionsIsCaseInsensitiveAndClearsHost(t *testing.T) {
+	t.Parallel()
+
+	upstreamReq := httptest.NewRequest(http.MethodPost, "https://example.com/v1/messages", nil)
+	upstreamReq.Header["anthropic-beta"] = []string{"unsupported-beta"}
+	upstreamReq.Host = "override.example.com"
+	info := &relaycommon.RelayInfo{
+		RuntimeHeadersToDelete: []string{"Anthropic-Beta", "host"},
+	}
+
+	applyRuntimeHeaderDeletionsToRequest(upstreamReq, info)
+
+	for headerName := range upstreamReq.Header {
+		require.False(t, strings.EqualFold(headerName, "anthropic-beta"))
+	}
+	require.Empty(t, upstreamReq.Host)
 }

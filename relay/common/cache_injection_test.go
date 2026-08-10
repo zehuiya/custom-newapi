@@ -138,3 +138,19 @@ func TestInitChannelMetaResetsSyntheticCachePercentageForRetry(t *testing.T) {
 	require.Nil(t, info.syntheticCachePercent)
 	require.Equal(t, 10000, info.CalculateSyntheticCacheTokens(10000))
 }
+
+func TestInitChannelMetaResetsRuntimeHeaderMutationsForRetry(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	info := &RelayInfo{
+		RuntimeHeadersOverride:    map[string]interface{}{"x-old": "old-value"},
+		RuntimeHeadersToDelete:    []string{"anthropic-beta"},
+		UseRuntimeHeadersOverride: true,
+	}
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	info.InitChannelMeta(ctx)
+
+	require.Nil(t, info.RuntimeHeadersOverride)
+	require.Nil(t, info.RuntimeHeadersToDelete)
+	require.False(t, info.UseRuntimeHeadersOverride)
+}

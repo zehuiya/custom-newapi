@@ -287,6 +287,38 @@ func applyHeaderOverrideToRequest(req *http.Request, headerOverride map[string]s
 	}
 }
 
+// ApplyRuntimeHeaderDeletions removes headers marked by parameter override
+// after adaptor defaults and header overrides have been applied.
+func ApplyRuntimeHeaderDeletions(header *http.Header, info *common.RelayInfo) {
+	if header == nil || info == nil {
+		return
+	}
+	for _, headerName := range info.RuntimeHeadersToDelete {
+		headerName = strings.TrimSpace(headerName)
+		if headerName == "" {
+			continue
+		}
+		for existingName := range *header {
+			if strings.EqualFold(existingName, headerName) {
+				delete(*header, existingName)
+			}
+		}
+	}
+}
+
+func applyRuntimeHeaderDeletionsToRequest(req *http.Request, info *common.RelayInfo) {
+	if req == nil || info == nil {
+		return
+	}
+	ApplyRuntimeHeaderDeletions(&req.Header, info)
+	for _, headerName := range info.RuntimeHeadersToDelete {
+		if strings.EqualFold(strings.TrimSpace(headerName), "Host") {
+			req.Host = ""
+			break
+		}
+	}
+}
+
 func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {
 	fullRequestURL, err := a.GetRequestURL(info)
 	if err != nil {
@@ -311,6 +343,7 @@ func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 		return nil, err
 	}
 	applyHeaderOverrideToRequest(req, headerOverride)
+	applyRuntimeHeaderDeletionsToRequest(req, info)
 	resp, err := doRequest(c, req, info)
 	if err != nil {
 		return nil, fmt.Errorf("do request failed: %w", err)
@@ -344,6 +377,7 @@ func DoFormRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBod
 		return nil, err
 	}
 	applyHeaderOverrideToRequest(req, headerOverride)
+	applyRuntimeHeaderDeletionsToRequest(req, info)
 	resp, err := doRequest(c, req, info)
 	if err != nil {
 		return nil, fmt.Errorf("do request failed: %w", err)
@@ -371,6 +405,7 @@ func DoWssRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 		targetHeader.Set(key, value)
 	}
 	targetHeader.Set("Content-Type", c.Request.Header.Get("Content-Type"))
+	ApplyRuntimeHeaderDeletions(&targetHeader, info)
 	targetConn, _, err := websocket.DefaultDialer.Dial(fullRequestURL, targetHeader)
 	if err != nil {
 		return nil, fmt.Errorf("dial failed to %s: %w", fullRequestURL, err)

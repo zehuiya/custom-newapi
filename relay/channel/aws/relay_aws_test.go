@@ -53,3 +53,47 @@ func TestDoAwsClientRequest_AppliesRuntimeHeaderOverrideToAnthropicBeta(t *testi
 	require.True(t, ok)
 	require.Equal(t, []any{"computer-use-2025-01-24"}, values)
 }
+
+func TestDoAwsClientRequest_AppliesRuntimeHeaderDeletionBeforeFormattingBody(t *testing.T) {
+	t.Parallel()
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	ctx.Request.Header.Set("anthropic-beta", "unsupported-beta")
+
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "claude-3-5-sonnet-20240620",
+		IsStream:        false,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ApiKey:            "access-key|secret-key|us-east-1",
+			UpstreamModelName: "claude-3-5-sonnet-20240620",
+			ParamOverride: map[string]any{
+				"operations": []any{
+					map[string]any{
+						"mode": "delete_header",
+						"path": "anthropic-beta",
+					},
+				},
+			},
+		},
+	}
+
+	_, err := relaycommon.ApplyParamOverrideWithRelayInfo([]byte(`{"model":"claude-3-5-sonnet-20240620"}`), info)
+	require.NoError(t, err)
+
+	requestBody := bytes.NewBufferString(`{"messages":[{"role":"user","content":"hello"}],"max_tokens":128}`)
+	adaptor := &Adaptor{}
+
+	_, err = doAwsClientRequest(ctx, info, adaptor, requestBody)
+	require.NoError(t, err)
+
+	awsReq, ok := adaptor.AwsReq.(*bedrockruntime.InvokeModelInput)
+	require.True(t, ok)
+
+	var payload map[string]any
+	require.NoError(t, common.Unmarshal(awsReq.Body, &payload))
+	_, exists := payload["anthropic_beta"]
+	require.False(t, exists)
+}

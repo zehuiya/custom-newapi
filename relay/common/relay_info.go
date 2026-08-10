@@ -148,6 +148,7 @@ type RelayInfo struct {
 	RetryIndex                            int
 	LastError                             *types.NewAPIError
 	RuntimeHeadersOverride                map[string]interface{}
+	RuntimeHeadersToDelete                []string
 	UseRuntimeHeadersOverride             bool
 	ParamOverrideAudit                    []string
 
@@ -182,6 +183,12 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 	// synthetic-cache percentage belongs to one upstream attempt and must not
 	// leak into the next channel's configured range.
 	info.syntheticCachePercent = nil
+	// Runtime header mutations also belong to one upstream attempt. Reset them
+	// before loading the next channel so overrides or deletions cannot leak
+	// across retries.
+	info.RuntimeHeadersOverride = nil
+	info.RuntimeHeadersToDelete = nil
+	info.UseRuntimeHeadersOverride = false
 
 	channelType := common.GetContextKeyInt(c, constant.ContextKeyChannelType)
 	paramOverride := common.GetContextKeyStringMap(c, constant.ContextKeyChannelParamOverride)

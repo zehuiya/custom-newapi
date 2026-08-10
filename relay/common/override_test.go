@@ -1741,6 +1741,9 @@ func TestApplyParamOverrideSetHeaderMapDeleteWholeHeaderWhenAllTokensCleared(t *
 	if _, exists := headers["anthropic-beta"]; exists {
 		t.Fatalf("expected anthropic-beta to be deleted when all mapped values are null")
 	}
+	if deletedHeaders := headerDeletionsFromContext(ctx); len(deletedHeaders) != 0 {
+		t.Fatalf("expected an empty set_header result to leave adaptor defaults available, got deletions: %v", deletedHeaders)
+	}
 }
 
 func TestApplyParamOverrideSetHeaderMapAppendsTokens(t *testing.T) {
@@ -1949,6 +1952,113 @@ func TestApplyParamOverrideWithRelayInfoSyncRuntimeHeaders(t *testing.T) {
 	}
 	if _, exists := info.RuntimeHeadersOverride["x-delete-me"]; exists {
 		t.Fatalf("expected x-delete-me header to be deleted")
+	}
+	if !reflect.DeepEqual(info.RuntimeHeadersToDelete, []string{"x-delete-me"}) {
+		t.Fatalf("expected x-delete-me to be marked for final deletion, got: %v", info.RuntimeHeadersToDelete)
+	}
+}
+
+func TestApplyParamOverrideHeaderMutationLastOperationWins(t *testing.T) {
+	tests := []struct {
+		name             string
+		operations       []interface{}
+		expectedValue    string
+		expectedExists   bool
+		expectedDeletion []string
+	}{
+		{
+			name: "set after delete restores header",
+			operations: []interface{}{
+				map[string]interface{}{"mode": "delete_header", "path": "X-Test"},
+				map[string]interface{}{"mode": "set_header", "path": "X-Test", "value": "restored"},
+			},
+			expectedValue:  "restored",
+			expectedExists: true,
+		},
+		{
+			name: "delete after set removes header",
+			operations: []interface{}{
+				map[string]interface{}{"mode": "set_header", "path": "X-Test", "value": "temporary"},
+				map[string]interface{}{"mode": "delete_header", "path": "X-Test"},
+			},
+			expectedDeletion: []string{"x-test"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := map[string]interface{}{
+				paramOverrideContextHeaderOverride: map[string]interface{}{"x-test": "original"},
+			}
+			override := map[string]interface{}{"operations": tt.operations}
+
+			_, err := ApplyParamOverride([]byte(`{"model":"test"}`), override, ctx)
+			if err != nil {
+				t.Fatalf("ApplyParamOverride returned error: %v", err)
+			}
+
+			headers := ensureMapKeyInContext(ctx, paramOverrideContextHeaderOverride)
+			gotValue, gotExists := headers["x-test"]
+			if gotExists != tt.expectedExists || gotExists && gotValue != tt.expectedValue {
+				t.Fatalf("unexpected final header: got (%v, %t), want (%q, %t)", gotValue, gotExists, tt.expectedValue, tt.expectedExists)
+			}
+			if got := headerDeletionsFromContext(ctx); len(got) != len(tt.expectedDeletion) || len(got) > 0 && !reflect.DeepEqual(got, tt.expectedDeletion) {
+				t.Fatalf("unexpected final header deletions: got %v, want %v", got, tt.expectedDeletion)
+			}
+		})
+	}
+}
+
+func TestApplyParamOverrideDeleteAndPassHeaderLastOperationWins(t *testing.T) {
+	tests := []struct {
+		name             string
+		operations       []interface{}
+		expectedValue    string
+		expectedExists   bool
+		expectedDeletion []string
+	}{
+		{
+			name: "pass after delete restores client header",
+			operations: []interface{}{
+				map[string]interface{}{"mode": "delete_header", "path": "X-Test"},
+				map[string]interface{}{"mode": "pass_headers", "value": []interface{}{"X-Test"}},
+			},
+			expectedValue:  "client-value",
+			expectedExists: true,
+		},
+		{
+			name: "delete after pass removes client header",
+			operations: []interface{}{
+				map[string]interface{}{"mode": "pass_headers", "value": []interface{}{"X-Test"}},
+				map[string]interface{}{"mode": "delete_header", "path": "X-Test"},
+			},
+			expectedDeletion: []string{"x-test"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := map[string]interface{}{
+				paramOverrideContextHeaderOverride: map[string]interface{}{"x-test": "static-value"},
+				paramOverrideContextRequestHeaders: map[string]interface{}{"x-test": "client-value"},
+			}
+			override := map[string]interface{}{"operations": tt.operations}
+
+			_, err := ApplyParamOverride([]byte(`{"model":"test"}`), override, ctx)
+			if err != nil {
+				t.Fatalf("ApplyParamOverride returned error: %v", err)
+			}
+
+			headers := ensureMapKeyInContext(ctx, paramOverrideContextHeaderOverride)
+			gotValue, gotExists := headers["x-test"]
+			if gotExists != tt.expectedExists || gotExists && gotValue != tt.expectedValue {
+				t.Fatalf("unexpected final header: got (%v, %t), want (%q, %t)", gotValue, gotExists, tt.expectedValue, tt.expectedExists)
+			}
+			gotDeletions := headerDeletionsFromContext(ctx)
+			if len(gotDeletions) != len(tt.expectedDeletion) || len(gotDeletions) > 0 && !reflect.DeepEqual(gotDeletions, tt.expectedDeletion) {
+				t.Fatalf("unexpected final header deletions: got %v, want %v", gotDeletions, tt.expectedDeletion)
+			}
+		})
 	}
 }
 
