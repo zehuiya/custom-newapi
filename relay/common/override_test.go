@@ -391,6 +391,410 @@ func TestApplyParamOverrideSetWildcardPath(t *testing.T) {
 	}
 }
 
+func TestApplyParamOverrideSetWildcardWithItemConditions(t *testing.T) {
+	input := []byte(`{
+		"messages":[
+			{"role":"system","content":"system"},
+			{"role":"user","content":"question"},
+			{"role":"assistant","content":"answer"},
+			{"role":"tool","content":"result"},
+			{"role":"assistant","content":null}
+		]
+	}`)
+	override := map[string]interface{}{
+		"operations": []interface{}{
+			map[string]interface{}{
+				"mode":        "set",
+				"path":        "messages.*.reasoning_content",
+				"value":       "",
+				"keep_origin": true,
+				"item_conditions": []interface{}{
+					map[string]interface{}{
+						"path":  "role",
+						"mode":  "full",
+						"value": "assistant",
+					},
+				},
+			},
+		},
+	}
+
+	out, err := ApplyParamOverride(input, override, nil)
+	if err != nil {
+		t.Fatalf("ApplyParamOverride returned error: %v", err)
+	}
+	assertJSONEqual(t, `{
+		"messages":[
+			{"role":"system","content":"system"},
+			{"role":"user","content":"question"},
+			{"role":"assistant","content":"answer","reasoning_content":""},
+			{"role":"tool","content":"result"},
+			{"role":"assistant","content":null,"reasoning_content":""}
+		]
+	}`, string(out))
+}
+
+func TestApplyParamOverrideItemConditionsKeepOrigin(t *testing.T) {
+	input := []byte(`{
+		"messages":[
+			{"role":"assistant","reasoning_content":"existing"},
+			{"role":"assistant","reasoning_content":""},
+			{"role":"assistant","reasoning_content":null},
+			{"role":"assistant"},
+			{"role":"user","reasoning_content":"user-value"}
+		]
+	}`)
+	override := map[string]interface{}{
+		"operations": []interface{}{
+			map[string]interface{}{
+				"mode":        "set",
+				"path":        "messages.*.reasoning_content",
+				"value":       "default",
+				"keep_origin": true,
+				"item_conditions": map[string]interface{}{
+					"role": "assistant",
+				},
+			},
+		},
+	}
+
+	out, err := ApplyParamOverride(input, override, nil)
+	if err != nil {
+		t.Fatalf("ApplyParamOverride returned error: %v", err)
+	}
+	assertJSONEqual(t, `{
+		"messages":[
+			{"role":"assistant","reasoning_content":"existing"},
+			{"role":"assistant","reasoning_content":""},
+			{"role":"assistant","reasoning_content":null},
+			{"role":"assistant","reasoning_content":"default"},
+			{"role":"user","reasoning_content":"user-value"}
+		]
+	}`, string(out))
+}
+
+func TestApplyParamOverrideItemConditionsLogic(t *testing.T) {
+	input := []byte(`{
+		"messages":[
+			{"role":"assistant","kind":"analysis"},
+			{"role":"assistant","kind":"final"},
+			{"role":"user","kind":"analysis"}
+		]
+	}`)
+	conditions := []interface{}{
+		map[string]interface{}{"path": "role", "mode": "full", "value": "assistant"},
+		map[string]interface{}{"path": "kind", "mode": "full", "value": "analysis"},
+	}
+
+	tests := []struct {
+		name      string
+		itemLogic string
+		expected  string
+	}{
+		{
+			name: "default OR",
+			expected: `{
+				"messages":[
+					{"role":"assistant","kind":"analysis","matched":true},
+					{"role":"assistant","kind":"final","matched":true},
+					{"role":"user","kind":"analysis","matched":true}
+				]
+			}`,
+		},
+		{
+			name:      "explicit AND",
+			itemLogic: "AND",
+			expected: `{
+				"messages":[
+					{"role":"assistant","kind":"analysis","matched":true},
+					{"role":"assistant","kind":"final"},
+					{"role":"user","kind":"analysis"}
+				]
+			}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			operation := map[string]interface{}{
+				"mode":            "set",
+				"path":            "messages.*.matched",
+				"value":           true,
+				"item_conditions": conditions,
+			}
+			if tt.itemLogic != "" {
+				operation["item_logic"] = tt.itemLogic
+			}
+			override := map[string]interface{}{
+				"operations": []interface{}{operation},
+			}
+
+			out, err := ApplyParamOverride(input, override, nil)
+			if err != nil {
+				t.Fatalf("ApplyParamOverride returned error: %v", err)
+			}
+			assertJSONEqual(t, tt.expected, string(out))
+		})
+	}
+}
+
+func TestApplyParamOverrideItemConditionsWithGlobalConditions(t *testing.T) {
+	input := []byte(`{"messages":[{"role":"assistant"},{"role":"user"}]}`)
+	override := map[string]interface{}{
+		"operations": []interface{}{
+			map[string]interface{}{
+				"mode":  "set",
+				"path":  "messages.*.reasoning_content",
+				"value": "",
+				"conditions": []interface{}{
+					map[string]interface{}{
+						"path":  "request_path",
+						"mode":  "prefix",
+						"value": "/v1/chat/completions",
+					},
+				},
+				"item_conditions": []interface{}{
+					map[string]interface{}{
+						"path":  "role",
+						"mode":  "full",
+						"value": "assistant",
+					},
+				},
+			},
+		},
+	}
+
+	out, err := ApplyParamOverride(input, override, map[string]interface{}{
+		"request_path": "/v1/chat/completions?debug=true",
+	})
+	if err != nil {
+		t.Fatalf("ApplyParamOverride returned error: %v", err)
+	}
+	assertJSONEqual(t, `{"messages":[{"role":"assistant","reasoning_content":""},{"role":"user"}]}`, string(out))
+
+	out, err = ApplyParamOverride(input, override, map[string]interface{}{
+		"request_path": "/v1/responses",
+	})
+	if err != nil {
+		t.Fatalf("ApplyParamOverride returned error: %v", err)
+	}
+	assertJSONEqual(t, string(input), string(out))
+}
+
+func TestApplyParamOverrideItemConditionsUseInnermostWildcard(t *testing.T) {
+	input := []byte(`{
+		"groups":[
+			{"role":"assistant","messages":[{"role":"user"},{"role":"assistant"}]},
+			{"role":"user","messages":[{"role":"assistant"}]}
+		]
+	}`)
+	override := map[string]interface{}{
+		"operations": []interface{}{
+			map[string]interface{}{
+				"mode":  "set",
+				"path":  "groups.*.messages.*.reasoning_content",
+				"value": "",
+				"item_conditions": []interface{}{
+					map[string]interface{}{
+						"path":  "role",
+						"mode":  "full",
+						"value": "assistant",
+					},
+				},
+			},
+		},
+	}
+
+	out, err := ApplyParamOverride(input, override, nil)
+	if err != nil {
+		t.Fatalf("ApplyParamOverride returned error: %v", err)
+	}
+	assertJSONEqual(t, `{
+		"groups":[
+			{"role":"assistant","messages":[{"role":"user"},{"role":"assistant","reasoning_content":""}]},
+			{"role":"user","messages":[{"role":"assistant","reasoning_content":""}]}
+		]
+	}`, string(out))
+}
+
+func TestApplyParamOverrideItemConditionsMissingKeyBehavior(t *testing.T) {
+	input := []byte(`{"messages":[{"role":"user"},{"content":"missing role"}]}`)
+	tests := []struct {
+		name           string
+		passMissingKey bool
+		expected       string
+	}{
+		{
+			name:     "missing item key does not fall back to global context",
+			expected: string(input),
+		},
+		{
+			name:           "pass missing item key",
+			passMissingKey: true,
+			expected:       `{"messages":[{"role":"user"},{"content":"missing role","matched":true}]}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			override := map[string]interface{}{
+				"operations": []interface{}{
+					map[string]interface{}{
+						"mode":  "set",
+						"path":  "messages.*.matched",
+						"value": true,
+						"item_conditions": []interface{}{
+							map[string]interface{}{
+								"path":             "role",
+								"mode":             "full",
+								"value":            "assistant",
+								"pass_missing_key": tt.passMissingKey,
+							},
+						},
+					},
+				},
+			}
+
+			out, err := ApplyParamOverride(input, override, map[string]interface{}{"role": "assistant"})
+			if err != nil {
+				t.Fatalf("ApplyParamOverride returned error: %v", err)
+			}
+			assertJSONEqual(t, tt.expected, string(out))
+		})
+	}
+}
+
+func TestApplyParamOverrideDeleteWildcardElementsWithItemConditions(t *testing.T) {
+	input := []byte(`{"messages":[{"role":"assistant","content":"a"},{"role":"user","content":"u"},{"role":"assistant","content":"b"},{"role":"tool","content":"t"}]}`)
+	override := map[string]interface{}{
+		"operations": []interface{}{
+			map[string]interface{}{
+				"mode": "delete",
+				"path": "messages.*",
+				"item_conditions": []interface{}{
+					map[string]interface{}{
+						"path":  "role",
+						"mode":  "full",
+						"value": "assistant",
+					},
+				},
+			},
+		},
+	}
+
+	out, err := ApplyParamOverride(input, override, nil)
+	if err != nil {
+		t.Fatalf("ApplyParamOverride returned error: %v", err)
+	}
+	assertJSONEqual(t, `{"messages":[{"role":"user","content":"u"},{"role":"tool","content":"t"}]}`, string(out))
+}
+
+func TestApplyParamOverrideItemConditionsRequireWildcardPath(t *testing.T) {
+	input := []byte(`{"messages":[{"role":"assistant"}]}`)
+	override := map[string]interface{}{
+		"operations": []interface{}{
+			map[string]interface{}{
+				"mode":  "set",
+				"path":  "messages.0.reasoning_content",
+				"value": "",
+				"item_conditions": []interface{}{
+					map[string]interface{}{
+						"path":  "role",
+						"mode":  "full",
+						"value": "assistant",
+					},
+				},
+			},
+		},
+	}
+
+	if _, err := ApplyParamOverride(input, override, nil); err == nil {
+		t.Fatal("expected item_conditions without a wildcard path to return an error")
+	}
+}
+
+func TestApplyParamOverrideRejectsInvalidItemConditions(t *testing.T) {
+	input := []byte(`{"messages":[{"role":"assistant"}]}`)
+	tests := []struct {
+		name      string
+		operation map[string]interface{}
+	}{
+		{
+			name: "malformed item conditions",
+			operation: map[string]interface{}{
+				"mode":            "set",
+				"path":            "messages.*.reasoning_content",
+				"value":           "",
+				"item_conditions": "role=assistant",
+			},
+		},
+		{
+			name: "item conditions without operation mode",
+			operation: map[string]interface{}{
+				"path": "messages.*.reasoning_content",
+				"item_conditions": []interface{}{
+					map[string]interface{}{"path": "role", "mode": "full", "value": "assistant"},
+				},
+			},
+		},
+		{
+			name: "empty item conditions",
+			operation: map[string]interface{}{
+				"mode":            "set",
+				"path":            "messages.*.reasoning_content",
+				"value":           "",
+				"item_conditions": []interface{}{},
+			},
+		},
+		{
+			name: "invalid item logic",
+			operation: map[string]interface{}{
+				"mode":       "set",
+				"path":       "messages.*.reasoning_content",
+				"value":      "",
+				"item_logic": "XOR",
+				"item_conditions": []interface{}{
+					map[string]interface{}{"path": "role", "mode": "full", "value": "assistant"},
+				},
+			},
+		},
+		{
+			name: "item conditions on non path operation",
+			operation: map[string]interface{}{
+				"mode":  "pass_headers",
+				"value": []interface{}{"X-Request-Id"},
+				"item_conditions": []interface{}{
+					map[string]interface{}{"path": "role", "mode": "full", "value": "assistant"},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			override := map[string]interface{}{
+				"operations": []interface{}{tt.operation},
+			}
+			if _, err := ApplyParamOverride(input, override, nil); err == nil {
+				t.Fatal("expected invalid item_conditions configuration to return an error")
+			}
+		})
+	}
+}
+
+func TestApplyParamOverrideKeepsLegacyOperationsFieldCompatibility(t *testing.T) {
+	input := []byte(`{"model":"gpt-4"}`)
+	override := map[string]interface{}{
+		"operations": []interface{}{"task-a", "task-b"},
+	}
+
+	out, err := ApplyParamOverride(input, override, nil)
+	if err != nil {
+		t.Fatalf("ApplyParamOverride returned error: %v", err)
+	}
+	assertJSONEqual(t, `{"model":"gpt-4","operations":["task-a","task-b"]}`, string(out))
+}
+
 func TestApplyParamOverrideTrimSpaceWildcardPath(t *testing.T) {
 	input := []byte(`{"tools":[{"custom":{"name":" alpha "}},{"custom":{"name":" beta"}},{"custom":{"name":"gamma "}}]}`)
 	override := map[string]interface{}{

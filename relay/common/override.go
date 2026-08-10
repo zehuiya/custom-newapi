@@ -49,14 +49,21 @@ type ConditionOperation struct {
 }
 
 type ParamOperation struct {
-	Path       string               `json:"path"`
-	Mode       string               `json:"mode"` // delete, delete_if_null, set, move, copy, prepend, append, trim_prefix, trim_suffix, ensure_prefix, ensure_suffix, trim_space, to_lower, to_upper, replace, regex_replace, return_error, prune_objects, set_header, delete_header, copy_header, move_header, pass_headers, sync_fields
-	Value      interface{}          `json:"value"`
-	KeepOrigin bool                 `json:"keep_origin"`
-	From       string               `json:"from,omitempty"`
-	To         string               `json:"to,omitempty"`
-	Conditions []ConditionOperation `json:"conditions,omitempty"` // 条件列表
-	Logic      string               `json:"logic,omitempty"`      // AND, OR (默认OR)
+	Path           string               `json:"path"`
+	Mode           string               `json:"mode"` // delete, delete_if_null, set, move, copy, prepend, append, trim_prefix, trim_suffix, ensure_prefix, ensure_suffix, trim_space, to_lower, to_upper, replace, regex_replace, return_error, prune_objects, set_header, delete_header, copy_header, move_header, pass_headers, sync_fields
+	Value          interface{}          `json:"value"`
+	KeepOrigin     bool                 `json:"keep_origin"`
+	From           string               `json:"from,omitempty"`
+	To             string               `json:"to,omitempty"`
+	Conditions     []ConditionOperation `json:"conditions,omitempty"`      // 整体请求条件列表
+	Logic          string               `json:"logic,omitempty"`           // AND, OR (默认OR)
+	ItemConditions []ConditionOperation `json:"item_conditions,omitempty"` // 相对于最后一个通配符匹配元素的条件列表
+	ItemLogic      string               `json:"item_logic,omitempty"`      // AND, OR (默认OR)
+}
+
+type resolvedOperationTarget struct {
+	Path     string
+	ItemPath string
 }
 
 type ParamOverrideReturnError struct {
@@ -136,10 +143,13 @@ func ApplyParamOverride(jsonData []byte, paramOverride map[string]interface{}, c
 	auditRecorder := getParamOverrideAuditRecorder(conditionContext)
 
 	// 尝试断言为操作格式
-	if operations, ok := tryParseOperations(paramOverride); ok {
+	operations, isOperationFormat, err := tryParseOperations(paramOverride)
+	if err != nil {
+		return nil, err
+	}
+	if isOperationFormat {
 		legacyOverride := buildLegacyParamOverride(paramOverride)
 		workingJSON := jsonData
-		var err error
 		if len(legacyOverride) > 0 {
 			workingJSON, err = applyOperationsLegacy(workingJSON, legacyOverride, auditRecorder)
 			if err != nil {
@@ -204,7 +214,7 @@ func shouldEnableParamOverrideAudit(paramOverride map[string]interface{}) bool {
 	if len(paramOverride) == 0 {
 		return false
 	}
-	if operations, ok := tryParseOperations(paramOverride); ok {
+	if operations, ok, _ := tryParseOperations(paramOverride); ok {
 		for _, operation := range operations {
 			if shouldAuditParamPath(strings.TrimSpace(operation.Path)) ||
 				shouldAuditParamPath(strings.TrimSpace(operation.To)) {
@@ -428,32 +438,49 @@ func GetEffectiveHeaderOverride(info *RelayInfo) map[string]interface{} {
 	return sanitizeHeaderOverrideMap(getHeaderOverrideMap(info))
 }
 
-func tryParseOperations(paramOverride map[string]interface{}) ([]ParamOperation, bool) {
+func tryParseOperations(paramOverride map[string]interface{}) ([]ParamOperation, bool, error) {
 	// 检查是否包含 "operations" 字段
 	opsValue, exists := paramOverride["operations"]
 	if !exists {
-		return nil, false
+		return nil, false, nil
 	}
 
 	var opMaps []map[string]interface{}
+	recognized := false
 	switch ops := opsValue.(type) {
 	case []interface{}:
 		opMaps = make([]map[string]interface{}, 0, len(ops))
+		invalidItem := false
 		for _, op := range ops {
 			opMap, ok := op.(map[string]interface{})
 			if !ok {
-				return nil, false
+				invalidItem = true
+				continue
 			}
+			recognized = recognized || looksLikeParamOperationMap(opMap)
 			opMaps = append(opMaps, opMap)
+		}
+		if len(ops) == 0 {
+			recognized = true
+		}
+		if invalidItem {
+			if recognized {
+				return nil, true, fmt.Errorf("invalid operations: every operation must be an object")
+			}
+			return nil, false, nil
 		}
 	case []map[string]interface{}:
 		opMaps = ops
+		recognized = len(ops) == 0 || lo.SomeBy(ops, looksLikeParamOperationMap)
 	default:
-		return nil, false
+		return nil, false, nil
+	}
+	if !recognized {
+		return nil, false, nil
 	}
 
 	operations := make([]ParamOperation, 0, len(opMaps))
-	for _, opMap := range opMaps {
+	for index, opMap := range opMaps {
 		operation := ParamOperation{}
 
 		// 断言必要字段
@@ -463,7 +490,7 @@ func tryParseOperations(paramOverride map[string]interface{}) ([]ParamOperation,
 		if mode, ok := opMap["mode"].(string); ok {
 			operation.Mode = mode
 		} else {
-			return nil, false // mode 是必需的
+			return nil, true, fmt.Errorf("invalid operations: operation %d mode is required", index+1)
 		}
 
 		// 可选字段
@@ -484,19 +511,56 @@ func tryParseOperations(paramOverride map[string]interface{}) ([]ParamOperation,
 		} else {
 			operation.Logic = "OR" // 默认为OR
 		}
+		operation.ItemLogic = "OR" // 默认为OR
 
 		// 解析条件
 		if conditions, exists := opMap["conditions"]; exists {
 			parsedConditions, err := parseConditionOperations(conditions)
 			if err != nil {
-				return nil, false
+				return nil, true, fmt.Errorf("invalid conditions: %w", err)
 			}
 			operation.Conditions = append(operation.Conditions, parsedConditions...)
+		}
+		if itemConditions, exists := opMap["item_conditions"]; exists {
+			parsedItemConditions, err := parseConditionOperations(itemConditions)
+			if err != nil {
+				return nil, true, fmt.Errorf("invalid item_conditions: %w", err)
+			}
+			if len(parsedItemConditions) == 0 {
+				return nil, true, fmt.Errorf("invalid item_conditions: at least one condition is required")
+			}
+			operation.ItemConditions = append(operation.ItemConditions, parsedItemConditions...)
+		}
+		if itemLogicRaw, exists := opMap["item_logic"]; exists {
+			itemLogic, ok := itemLogicRaw.(string)
+			if !ok {
+				return nil, true, fmt.Errorf("invalid item_logic: must be AND or OR")
+			}
+			itemLogic = strings.ToUpper(strings.TrimSpace(itemLogic))
+			if itemLogic != "AND" && itemLogic != "OR" {
+				return nil, true, fmt.Errorf("invalid item_logic: must be AND or OR")
+			}
+			if len(operation.ItemConditions) == 0 {
+				return nil, true, fmt.Errorf("invalid item_logic: item_conditions are required")
+			}
+			operation.ItemLogic = itemLogic
 		}
 
 		operations = append(operations, operation)
 	}
-	return operations, true
+	return operations, true, nil
+}
+
+func looksLikeParamOperationMap(opMap map[string]interface{}) bool {
+	for _, key := range []string{
+		"mode", "path", "value", "keep_origin", "from", "to", "conditions", "logic",
+		"item_conditions", "item_logic", "description",
+	} {
+		if _, exists := opMap[key]; exists {
+			return true
+		}
+	}
+	return false
 }
 
 func checkConditions(jsonStr, contextJSON string, conditions []ConditionOperation, logic string) (bool, error) {
@@ -682,6 +746,14 @@ func applyOperations(jsonStr string, operations []ParamOperation, conditionConte
 
 	result := jsonStr
 	for _, op := range operations {
+		if len(op.ItemConditions) > 0 {
+			if !isPathBasedOperation(op.Mode) {
+				return "", fmt.Errorf("item_conditions require a path-based operation, got mode %s", op.Mode)
+			}
+			if lastWildcardSegmentIndex(op.Path) < 0 {
+				return "", fmt.Errorf("item_conditions require a wildcard path, got %s", op.Path)
+			}
+		}
 		// 检查条件是否满足
 		ok, err := checkConditions(result, contextJSON, op.Conditions, op.Logic)
 		if err != nil {
@@ -694,18 +766,28 @@ func applyOperations(jsonStr string, operations []ParamOperation, conditionConte
 		opPath := processNegativeIndex(result, op.Path)
 		var opPaths []string
 		if isPathBasedOperation(op.Mode) {
-			opPaths, err = resolveOperationPaths(result, opPath)
+			var targets []resolvedOperationTarget
+			targets, err = resolveOperationTargets(result, opPath)
 			if err != nil {
 				return "", err
 			}
-			if len(opPaths) == 0 {
+			if len(op.ItemConditions) > 0 {
+				targets, err = filterOperationTargetsByItemConditions(result, targets, op.ItemConditions, op.ItemLogic)
+				if err != nil {
+					return "", err
+				}
+			}
+			if len(targets) == 0 {
 				continue
 			}
+			opPaths = lo.Map(targets, func(target resolvedOperationTarget, _ int) string {
+				return target.Path
+			})
 		}
 
 		switch op.Mode {
 		case "delete":
-			for _, path := range opPaths {
+			for _, path := range orderDeletePaths(opPaths, opPath) {
 				result, err = deleteValue(result, path)
 				if err != nil {
 					break
@@ -713,7 +795,7 @@ func applyOperations(jsonStr string, operations []ParamOperation, conditionConte
 				auditRecorder.recordOperation("delete", path, "", "", nil)
 			}
 		case "delete_if_null":
-			for _, path := range opPaths {
+			for _, path := range orderDeletePaths(opPaths, opPath) {
 				var deleted bool
 				result, deleted, err = deleteValueIfNull(result, path)
 				if err != nil {
@@ -1575,6 +1657,78 @@ func resolveOperationPaths(jsonStr, path string) ([]string, error) {
 		return []string{path}, nil
 	}
 	return expandWildcardPaths(jsonStr, path)
+}
+
+func resolveOperationTargets(jsonStr, path string) ([]resolvedOperationTarget, error) {
+	paths, err := resolveOperationPaths(jsonStr, path)
+	if err != nil {
+		return nil, err
+	}
+
+	wildcardIndex := lastWildcardSegmentIndex(path)
+	targets := make([]resolvedOperationTarget, 0, len(paths))
+	for _, resolvedPath := range paths {
+		target := resolvedOperationTarget{Path: resolvedPath}
+		if wildcardIndex >= 0 {
+			segments := strings.Split(resolvedPath, ".")
+			if wildcardIndex >= len(segments) {
+				return nil, fmt.Errorf("failed to resolve wildcard item path for %s", resolvedPath)
+			}
+			target.ItemPath = strings.Join(segments[:wildcardIndex+1], ".")
+		}
+		targets = append(targets, target)
+	}
+	return targets, nil
+}
+
+func lastWildcardSegmentIndex(path string) int {
+	lastIndex := -1
+	for index, segment := range strings.Split(path, ".") {
+		if strings.TrimSpace(segment) == "*" {
+			lastIndex = index
+		}
+	}
+	return lastIndex
+}
+
+func orderDeletePaths(paths []string, pattern string) []string {
+	segments := strings.Split(pattern, ".")
+	if len(segments) == 0 || strings.TrimSpace(segments[len(segments)-1]) != "*" {
+		return paths
+	}
+
+	// Deleting direct array wildcard targets in ascending order shifts later
+	// indexes. Reverse only this case; leaf-field deletes keep their old order.
+	ordered := make([]string, len(paths))
+	for index, path := range paths {
+		ordered[len(paths)-1-index] = path
+	}
+	return ordered
+}
+
+func filterOperationTargetsByItemConditions(jsonStr string, targets []resolvedOperationTarget, conditions []ConditionOperation, logic string) ([]resolvedOperationTarget, error) {
+	if len(conditions) == 0 {
+		return targets, nil
+	}
+
+	filtered := make([]resolvedOperationTarget, 0, len(targets))
+	for _, target := range targets {
+		if target.ItemPath == "" {
+			return nil, fmt.Errorf("item_conditions require a resolved wildcard item path")
+		}
+		item := gjson.Get(jsonStr, target.ItemPath)
+		if !item.Exists() {
+			continue
+		}
+		matched, err := checkConditions(item.Raw, "", conditions, logic)
+		if err != nil {
+			return nil, fmt.Errorf("failed to evaluate item_conditions for %s: %w", target.ItemPath, err)
+		}
+		if matched {
+			filtered = append(filtered, target)
+		}
+	}
+	return filtered, nil
 }
 
 func expandWildcardPaths(jsonStr, path string) ([]string, error) {

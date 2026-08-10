@@ -116,6 +116,29 @@ const MODE_META = {
   move_header: { from: true, to: true, keepOrigin: true, pathAlias: true },
 };
 
+const ITEM_CONDITION_SUPPORTED_MODES = new Set([
+  'delete',
+  'delete_if_null',
+  'set',
+  'prepend',
+  'append',
+  'trim_prefix',
+  'trim_suffix',
+  'ensure_prefix',
+  'ensure_suffix',
+  'trim_space',
+  'to_lower',
+  'to_upper',
+  'replace',
+  'regex_replace',
+  'prune_objects',
+]);
+
+const hasIndependentWildcardSegment = (path) =>
+  String(path || '')
+    .split('.')
+    .some((segment) => segment.trim() === '*');
+
 const VALUE_REQUIRED_MODES = new Set([
   'trim_prefix',
   'trim_suffix',
@@ -793,6 +816,18 @@ const normalizeCondition = (condition = {}) => ({
   pass_missing_key: condition.pass_missing_key === true,
 });
 
+const normalizeConditions = (conditions) => {
+  if (Array.isArray(conditions)) {
+    return conditions.map(normalizeCondition);
+  }
+  if (conditions && typeof conditions === 'object') {
+    return Object.entries(conditions).map(([path, value]) =>
+      normalizeCondition({ path, mode: 'full', value }),
+    );
+  }
+  return [];
+};
+
 const createDefaultCondition = () => normalizeCondition({});
 
 const normalizeOperation = (operation = {}) => ({
@@ -805,9 +840,10 @@ const normalizeOperation = (operation = {}) => ({
   from: typeof operation.from === 'string' ? operation.from : '',
   to: typeof operation.to === 'string' ? operation.to : '',
   logic: String(operation.logic || 'OR').toUpperCase() === 'AND' ? 'AND' : 'OR',
-  conditions: Array.isArray(operation.conditions)
-    ? operation.conditions.map(normalizeCondition)
-    : [],
+  conditions: normalizeConditions(operation.conditions),
+  item_logic:
+    String(operation.item_logic || 'OR').toUpperCase() === 'AND' ? 'AND' : 'OR',
+  item_conditions: normalizeConditions(operation.item_conditions),
 });
 
 const createDefaultOperation = () => normalizeOperation({ mode: 'set' });
@@ -936,7 +972,10 @@ const parseInitialState = (rawValue) => {
 };
 
 const isOperationBlank = (operation) => {
-  const hasCondition = (operation.conditions || []).some(
+  const hasCondition = [
+    ...(operation.conditions || []),
+    ...(operation.item_conditions || []),
+  ].some(
     (condition) =>
       condition.path.trim() ||
       String(condition.value_text ?? '').trim() ||
@@ -977,9 +1016,23 @@ const validateOperations = (operations, t) => {
     const pathValue = op.path.trim();
     const fromValue = op.from.trim();
     const toValue = op.to.trim();
+    const itemConditions = (op.item_conditions || [])
+      .map(buildConditionPayload)
+      .filter(Boolean);
 
     if (meta.path && !pathValue) {
       return t('第 {{line}} 条操作缺少目标路径', { line });
+    }
+    if (itemConditions.length > 0) {
+      if (!ITEM_CONDITION_SUPPORTED_MODES.has(mode)) {
+        return t('第 {{line}} 条操作不支持逐元素条件', { line });
+      }
+      if (!hasIndependentWildcardSegment(pathValue)) {
+        return t(
+          '第 {{line}} 条操作配置了逐元素条件，但目标路径不包含独立的 * 段',
+          { line },
+        );
+      }
     }
     if (FROM_REQUIRED_MODES.has(mode) && !fromValue) {
       if (!(meta.pathAlias && pathValue)) {
@@ -1081,6 +1134,7 @@ const ParamOverrideEditorModal = ({ visible, value, onSave, onCancel }) => {
   const [operationSearch, setOperationSearch] = useState('');
   const [selectedOperationId, setSelectedOperationId] = useState('');
   const [expandedConditionMap, setExpandedConditionMap] = useState({});
+  const [expandedItemConditionMap, setExpandedItemConditionMap] = useState({});
   const [draggedOperationId, setDraggedOperationId] = useState('');
   const [dragOverOperationId, setDragOverOperationId] = useState('');
   const [dragOverPosition, setDragOverPosition] = useState('before');
@@ -1103,6 +1157,7 @@ const ParamOverrideEditorModal = ({ visible, value, onSave, onCancel }) => {
     setOperationSearch('');
     setSelectedOperationId(nextState.operations[0]?.id || '');
     setExpandedConditionMap({});
+    setExpandedItemConditionMap({});
     setDraggedOperationId('');
     setDragOverOperationId('');
     setDragOverPosition('before');
@@ -1166,6 +1221,10 @@ const ParamOverrideEditorModal = ({ visible, value, onSave, onCancel }) => {
         operation.from,
         operation.to,
         operation.value_text,
+        ...(operation.item_conditions || []).flatMap((condition) => [
+          condition.path,
+          condition.value_text,
+        ]),
       ]
         .filter(Boolean)
         .join(' ')
@@ -1273,6 +1332,15 @@ const ParamOverrideEditorModal = ({ visible, value, onSave, onCancel }) => {
           payload.logic = operation.logic === 'AND' ? 'AND' : 'OR';
         }
 
+        const itemConditions = (operation.item_conditions || [])
+          .map(buildConditionPayload)
+          .filter(Boolean);
+
+        if (itemConditions.length > 0) {
+          payload.item_conditions = itemConditions;
+          payload.item_logic = operation.item_logic === 'AND' ? 'AND' : 'OR';
+        }
+
         return payload;
       });
 
@@ -1322,6 +1390,8 @@ const ParamOverrideEditorModal = ({ visible, value, onSave, onCancel }) => {
       setVisualMode('operations');
       setOperations([fallback]);
       setSelectedOperationId(fallback.id);
+      setExpandedConditionMap({});
+      setExpandedItemConditionMap({});
       setLegacyValue('');
       setJsonError('');
       setEditMode('visual');
@@ -1345,6 +1415,8 @@ const ParamOverrideEditorModal = ({ visible, value, onSave, onCancel }) => {
       setVisualMode('operations');
       setOperations(nextOperations);
       setSelectedOperationId(nextOperations[0]?.id || '');
+      setExpandedConditionMap({});
+      setExpandedItemConditionMap({});
       setLegacyValue('');
       setJsonError('');
       setEditMode('visual');
@@ -1358,6 +1430,8 @@ const ParamOverrideEditorModal = ({ visible, value, onSave, onCancel }) => {
       setLegacyValue(JSON.stringify(parsed, null, 2));
       setOperations([fallback]);
       setSelectedOperationId(fallback.id);
+      setExpandedConditionMap({});
+      setExpandedItemConditionMap({});
       setJsonError('');
       setEditMode('visual');
       setTemplateGroupKey('basic');
@@ -1375,6 +1449,7 @@ const ParamOverrideEditorModal = ({ visible, value, onSave, onCancel }) => {
     setOperations([fallback]);
     setSelectedOperationId(fallback.id);
     setExpandedConditionMap({});
+    setExpandedItemConditionMap({});
     setJsonText(text);
     setJsonError('');
     setEditMode('visual');
@@ -1388,6 +1463,7 @@ const ParamOverrideEditorModal = ({ visible, value, onSave, onCancel }) => {
     setOperations(finalOperations);
     setSelectedOperationId(finalOperations[0]?.id || '');
     setExpandedConditionMap({});
+    setExpandedItemConditionMap({});
     setJsonText(JSON.stringify({ operations: operationsPayload || [] }, null, 2));
     setJsonError('');
     setEditMode('visual');
@@ -1422,6 +1498,7 @@ const ParamOverrideEditorModal = ({ visible, value, onSave, onCancel }) => {
     setOperations([fallback]);
     setSelectedOperationId(fallback.id);
     setExpandedConditionMap({});
+    setExpandedItemConditionMap({});
     setJsonText(text);
     setJsonError('');
     setEditMode('visual');
@@ -1438,6 +1515,7 @@ const ParamOverrideEditorModal = ({ visible, value, onSave, onCancel }) => {
     setOperations(nextOperations.length > 0 ? nextOperations : appended);
     setSelectedOperationId(nextOperations[0]?.id || appended[0]?.id || '');
     setExpandedConditionMap({});
+    setExpandedItemConditionMap({});
     setLegacyValue('');
     setJsonError('');
     setEditMode('visual');
@@ -1451,6 +1529,7 @@ const ParamOverrideEditorModal = ({ visible, value, onSave, onCancel }) => {
     setOperations([fallback]);
     setSelectedOperationId(fallback.id);
     setExpandedConditionMap({});
+    setExpandedItemConditionMap({});
     setJsonText('');
     setJsonError('');
     setTemplateGroupKey('basic');
@@ -1718,6 +1797,14 @@ const ParamOverrideEditorModal = ({ visible, value, onSave, onCancel }) => {
           invert: condition.invert,
           pass_missing_key: condition.pass_missing_key,
         })),
+        item_logic: source.item_logic,
+        item_conditions: (source.item_conditions || []).map((condition) => ({
+          path: condition.path,
+          mode: condition.mode,
+          value: parseLooseValue(condition.value_text),
+          invert: condition.invert,
+          pass_missing_key: condition.pass_missing_key,
+        })),
       });
       insertedId = cloned.id;
       const next = [...prev];
@@ -1735,6 +1822,14 @@ const ParamOverrideEditorModal = ({ visible, value, onSave, onCancel }) => {
       return prev.filter((item) => item.id !== operationId);
     });
     setExpandedConditionMap((prev) => {
+      if (!Object.prototype.hasOwnProperty.call(prev, operationId)) {
+        return prev;
+      }
+      const next = { ...prev };
+      delete next[operationId];
+      return next;
+    });
+    setExpandedItemConditionMap((prev) => {
       if (!Object.prototype.hasOwnProperty.call(prev, operationId)) {
         return prev;
       }
@@ -1798,6 +1893,63 @@ const ParamOverrideEditorModal = ({ visible, value, onSave, onCancel }) => {
     }));
   };
 
+  const addItemCondition = (operationId) => {
+    const createdCondition = createDefaultCondition();
+    setOperations((prev) =>
+      prev.map((operation) =>
+        operation.id === operationId
+          ? {
+              ...operation,
+              item_conditions: [
+                ...(operation.item_conditions || []),
+                createdCondition,
+              ],
+            }
+          : operation,
+      ),
+    );
+    setExpandedItemConditionMap((prev) => ({
+      ...prev,
+      [operationId]: [...(prev[operationId] || []), createdCondition.id],
+    }));
+  };
+
+  const updateItemCondition = (operationId, conditionId, patch) => {
+    setOperations((prev) =>
+      prev.map((operation) => {
+        if (operation.id !== operationId) return operation;
+        return {
+          ...operation,
+          item_conditions: (operation.item_conditions || []).map((condition) =>
+            condition.id === conditionId
+              ? { ...condition, ...patch }
+              : condition,
+          ),
+        };
+      }),
+    );
+  };
+
+  const removeItemCondition = (operationId, conditionId) => {
+    setOperations((prev) =>
+      prev.map((operation) => {
+        if (operation.id !== operationId) return operation;
+        return {
+          ...operation,
+          item_conditions: (operation.item_conditions || []).filter(
+            (condition) => condition.id !== conditionId,
+          ),
+        };
+      }),
+    );
+    setExpandedItemConditionMap((prev) => ({
+      ...prev,
+      [operationId]: (prev[operationId] || []).filter(
+        (id) => id !== conditionId,
+      ),
+    }));
+  };
+
   const selectedConditionKeys = useMemo(
     () => expandedConditionMap[selectedOperationId] || [],
     [expandedConditionMap, selectedOperationId],
@@ -1829,6 +1981,42 @@ const ParamOverrideEditorModal = ({ visible, value, onSave, onCancel }) => {
   const collapseAllSelectedConditions = useCallback(() => {
     if (!selectedOperationId) return;
     setExpandedConditionMap((prev) => ({
+      ...prev,
+      [selectedOperationId]: [],
+    }));
+  }, [selectedOperationId]);
+
+  const selectedItemConditionKeys = useMemo(
+    () => expandedItemConditionMap[selectedOperationId] || [],
+    [expandedItemConditionMap, selectedOperationId],
+  );
+
+  const handleItemConditionCollapseChange = useCallback(
+    (operationId, activeKeys) => {
+      const keys = (
+        Array.isArray(activeKeys) ? activeKeys : [activeKeys]
+      ).filter(Boolean);
+      setExpandedItemConditionMap((prev) => ({
+        ...prev,
+        [operationId]: keys,
+      }));
+    },
+    [],
+  );
+
+  const expandAllSelectedItemConditions = useCallback(() => {
+    if (!selectedOperationId || !selectedOperation) return;
+    setExpandedItemConditionMap((prev) => ({
+      ...prev,
+      [selectedOperationId]: (selectedOperation.item_conditions || []).map(
+        (condition) => condition.id,
+      ),
+    }));
+  }, [selectedOperation, selectedOperationId]);
+
+  const collapseAllSelectedItemConditions = useCallback(() => {
+    if (!selectedOperationId) return;
+    setExpandedItemConditionMap((prev) => ({
       ...prev,
       [selectedOperationId]: [],
     }));
@@ -2145,7 +2333,8 @@ const ParamOverrideEditorModal = ({ visible, value, onSave, onCancel }) => {
                                       </div>
                                     </div>
                                     <Tag size='small' color='grey'>
-                                      {(operation.conditions || []).length}
+                                      {(operation.conditions || []).length +
+                                        (operation.item_conditions || []).length}
                                     </Tag>
                                   </div>
                                   <Space spacing={6} style={{ marginTop: 8 }}>
@@ -2179,6 +2368,15 @@ const ParamOverrideEditorModal = ({ visible, value, onSave, onCancel }) => {
                         const mode = selectedOperation.mode || 'set';
                         const meta = MODE_META[mode] || MODE_META.set;
                         const conditions = selectedOperation.conditions || [];
+                        const itemConditions =
+                          selectedOperation.item_conditions || [];
+                        const itemConditionModeSupported =
+                          ITEM_CONDITION_SUPPORTED_MODES.has(mode);
+                        const itemConditionHasWildcard =
+                          hasIndependentWildcardSegment(selectedOperation.path);
+                        const itemConditionPathEligible =
+                          itemConditionModeSupported &&
+                          itemConditionHasWildcard;
                         const syncFromTarget =
                           mode === 'sync_fields'
                             ? parseSyncTargetSpec(selectedOperation.from)
@@ -3270,6 +3468,277 @@ const ParamOverrideEditorModal = ({ visible, value, onSave, onCancel }) => {
                                 </Collapse>
                               )}
                             </div>
+
+                            {itemConditionPathEligible ||
+                            itemConditions.length > 0 ? (
+                              <div
+                                className='mt-3 rounded-xl p-3'
+                                style={{
+                                  background: 'rgba(127, 127, 127, 0.08)',
+                                }}
+                              >
+                                <div className='flex items-center justify-between mb-2'>
+                                  <Space align='center'>
+                                    <Text>{t('逐元素条件')}</Text>
+                                    <Select
+                                      value={
+                                        selectedOperation.item_logic || 'OR'
+                                      }
+                                      optionList={[
+                                        {
+                                          label: t('满足任一条件（OR）'),
+                                          value: 'OR',
+                                        },
+                                        {
+                                          label: t('必须全部满足（AND）'),
+                                          value: 'AND',
+                                        },
+                                      ]}
+                                      size='small'
+                                      style={{ width: 180 }}
+                                      onChange={(nextValue) =>
+                                        updateOperation(
+                                          selectedOperation.id,
+                                          { item_logic: nextValue },
+                                        )
+                                      }
+                                    />
+                                  </Space>
+                                  <Space spacing={6}>
+                                    <Button
+                                      size='small'
+                                      type='tertiary'
+                                      onClick={
+                                        expandAllSelectedItemConditions
+                                      }
+                                    >
+                                      {t('全部展开')}
+                                    </Button>
+                                    <Button
+                                      size='small'
+                                      type='tertiary'
+                                      onClick={
+                                        collapseAllSelectedItemConditions
+                                      }
+                                    >
+                                      {t('全部收起')}
+                                    </Button>
+                                    <Button
+                                      icon={<IconPlus />}
+                                      size='small'
+                                      disabled={!itemConditionPathEligible}
+                                      onClick={() =>
+                                        addItemCondition(
+                                          selectedOperation.id,
+                                        )
+                                      }
+                                    >
+                                      {t('新增条件')}
+                                    </Button>
+                                  </Space>
+                                </div>
+
+                                <Text
+                                  type={
+                                    itemConditionPathEligible
+                                      ? 'tertiary'
+                                      : 'warning'
+                                  }
+                                  size='small'
+                                  className='mb-2 block'
+                                >
+                                  {itemConditionPathEligible
+                                    ? t(
+                                        '条件路径相对于 * 命中的元素，例如 role。',
+                                      )
+                                    : !itemConditionModeSupported
+                                      ? t('当前操作类型不支持逐元素条件。')
+                                      : t(
+                                        '逐元素条件要求目标路径包含独立的 * 段，例如 messages.*.reasoning_content。',
+                                      )}
+                                </Text>
+
+                                {itemConditions.length === 0 ? (
+                                  <Text type='tertiary' size='small'>
+                                    {t(
+                                      '没有逐元素条件时，所有通配元素都会执行该操作。',
+                                    )}
+                                  </Text>
+                                ) : (
+                                  <Collapse
+                                    keepDOM
+                                    activeKey={selectedItemConditionKeys}
+                                    onChange={(activeKeys) =>
+                                      handleItemConditionCollapseChange(
+                                        selectedOperation.id,
+                                        activeKeys,
+                                      )
+                                    }
+                                  >
+                                    {itemConditions.map(
+                                      (condition, conditionIndex) => (
+                                        <Collapse.Panel
+                                          key={condition.id}
+                                          itemKey={condition.id}
+                                          header={
+                                            <Space spacing={8}>
+                                              <Tag size='small'>
+                                                {`I${conditionIndex + 1}`}
+                                              </Tag>
+                                              <Text
+                                                type='tertiary'
+                                                size='small'
+                                              >
+                                                {condition.path ||
+                                                  t('未设置路径')}
+                                              </Text>
+                                            </Space>
+                                          }
+                                        >
+                                          <div>
+                                            <div className='flex items-center justify-between mb-2'>
+                                              <Text
+                                                type='tertiary'
+                                                size='small'
+                                              >
+                                                {t('条件项设置')}
+                                              </Text>
+                                              <Button
+                                                theme='borderless'
+                                                type='danger'
+                                                icon={<IconDelete />}
+                                                size='small'
+                                                onClick={() =>
+                                                  removeItemCondition(
+                                                    selectedOperation.id,
+                                                    condition.id,
+                                                  )
+                                                }
+                                              >
+                                                {t('删除条件')}
+                                              </Button>
+                                            </div>
+                                            <Row gutter={12}>
+                                              <Col xs={24} md={10}>
+                                                <Text
+                                                  type='tertiary'
+                                                  size='small'
+                                                >
+                                                  {t('字段路径')}
+                                                </Text>
+                                                <Input
+                                                  value={condition.path}
+                                                  placeholder='role'
+                                                  onChange={(nextValue) =>
+                                                    updateItemCondition(
+                                                      selectedOperation.id,
+                                                      condition.id,
+                                                      { path: nextValue },
+                                                    )
+                                                  }
+                                                />
+                                              </Col>
+                                              <Col xs={24} md={8}>
+                                                <Text
+                                                  type='tertiary'
+                                                  size='small'
+                                                >
+                                                  {t('匹配方式')}
+                                                </Text>
+                                                <Select
+                                                  value={condition.mode}
+                                                  optionList={
+                                                    CONDITION_MODE_OPTIONS
+                                                  }
+                                                  onChange={(nextValue) =>
+                                                    updateItemCondition(
+                                                      selectedOperation.id,
+                                                      condition.id,
+                                                      { mode: nextValue },
+                                                    )
+                                                  }
+                                                  style={{ width: '100%' }}
+                                                />
+                                              </Col>
+                                              <Col xs={24} md={6}>
+                                                <Text
+                                                  type='tertiary'
+                                                  size='small'
+                                                >
+                                                  {t('匹配值')}
+                                                </Text>
+                                                <Input
+                                                  value={condition.value_text}
+                                                  placeholder='assistant'
+                                                  onChange={(nextValue) =>
+                                                    updateItemCondition(
+                                                      selectedOperation.id,
+                                                      condition.id,
+                                                      {
+                                                        value_text: nextValue,
+                                                      },
+                                                    )
+                                                  }
+                                                />
+                                              </Col>
+                                            </Row>
+                                            <div className='mt-2 flex flex-wrap gap-3'>
+                                              <div className='flex items-center gap-2'>
+                                                <Text
+                                                  type='tertiary'
+                                                  size='small'
+                                                >
+                                                  {t('条件取反')}
+                                                </Text>
+                                                <Switch
+                                                  checked={Boolean(
+                                                    condition.invert,
+                                                  )}
+                                                  checkedText={t('开')}
+                                                  uncheckedText={t('关')}
+                                                  onChange={(nextValue) =>
+                                                    updateItemCondition(
+                                                      selectedOperation.id,
+                                                      condition.id,
+                                                      { invert: nextValue },
+                                                    )
+                                                  }
+                                                />
+                                              </div>
+                                              <div className='flex items-center gap-2'>
+                                                <Text
+                                                  type='tertiary'
+                                                  size='small'
+                                                >
+                                                  {t('字段缺失视为命中')}
+                                                </Text>
+                                                <Switch
+                                                  checked={Boolean(
+                                                    condition.pass_missing_key,
+                                                  )}
+                                                  checkedText={t('开')}
+                                                  uncheckedText={t('关')}
+                                                  onChange={(nextValue) =>
+                                                    updateItemCondition(
+                                                      selectedOperation.id,
+                                                      condition.id,
+                                                      {
+                                                        pass_missing_key:
+                                                          nextValue,
+                                                      },
+                                                    )
+                                                  }
+                                                />
+                                              </div>
+                                            </div>
+                                          </div>
+                                        </Collapse.Panel>
+                                      ),
+                                    )}
+                                  </Collapse>
+                                )}
+                              </div>
+                            ) : null}
                           </Card>
                         );
                       })()
