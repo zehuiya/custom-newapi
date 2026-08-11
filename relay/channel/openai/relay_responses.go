@@ -15,6 +15,8 @@ import (
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
@@ -36,6 +38,11 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 
 	if oaiError := responsesResponse.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
+	}
+
+	responseBody, _, err = ensureResponsesCreatedAt(responseBody, false, responsesCreatedAtFallback(info))
+	if err != nil {
+		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 
 	if responsesResponse.HasImageGenerationCall() {
@@ -86,12 +93,23 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 
 	var usage = &dto.Usage{}
 	var responseTextBuilder strings.Builder
+	responseCreatedAt := responsesCreatedAtFallback(info)
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+		patchedData, effectiveCreatedAt, err := ensureResponsesCreatedAt(common.StringToByteSlice(data), true, responseCreatedAt)
+		if err != nil {
+			logger.LogError(c, "failed to add responses created_at: "+err.Error())
+			sr.Error(err)
+		} else {
+			if effectiveCreatedAt > 0 {
+				responseCreatedAt = effectiveCreatedAt
+			}
+			data = string(patchedData)
+		}
 
 		// 检查当前数据是否包含 completed 状态和 usage 信息
 		var streamResponse dto.ResponsesStreamResponse
-		if err := common.UnmarshalJsonStr(data, &streamResponse); err != nil {
+		if err = common.UnmarshalJsonStr(data, &streamResponse); err != nil {
 			logger.LogError(c, "failed to unmarshal stream response: "+err.Error())
 			sr.Error(err)
 			return
@@ -156,6 +174,51 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 
 	markOpenAIUsageSemantic(usage)
 	return usage, nil
+}
+
+func responsesCreatedAtFallback(info *relaycommon.RelayInfo) int64 {
+	if info != nil && !info.StartTime.IsZero() {
+		return info.StartTime.Unix()
+	}
+	return common.GetTimestamp()
+}
+
+// ensureResponsesCreatedAt adds the Responses API creation timestamp without
+// re-marshalling the whole payload. This preserves unknown provider fields and
+// avoids injecting zero-value fields from the response DTO.
+func ensureResponsesCreatedAt(data []byte, nestedResponse bool, fallbackCreatedAt int64) ([]byte, int64, error) {
+	if len(data) == 0 {
+		return data, 0, nil
+	}
+
+	root := gjson.ParseBytes(data)
+	if !root.IsObject() {
+		return data, 0, nil
+	}
+
+	container := root
+	path := "created_at"
+	if nestedResponse {
+		container = root.Get("response")
+		if !container.IsObject() {
+			return data, 0, nil
+		}
+		path = "response.created_at"
+	}
+
+	createdAt := container.Get("created_at")
+	if createdAt.Exists() && createdAt.Type == gjson.Number && createdAt.Int() > 0 {
+		return data, createdAt.Int(), nil
+	}
+	if fallbackCreatedAt <= 0 {
+		fallbackCreatedAt = common.GetTimestamp()
+	}
+
+	patchedData, err := sjson.SetBytes(data, path, fallbackCreatedAt)
+	if err != nil {
+		return data, 0, err
+	}
+	return patchedData, fallbackCreatedAt, nil
 }
 
 func fillRelayUsageFromResponsesUsage(usage *dto.Usage, responsesUsage *dto.Usage) {

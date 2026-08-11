@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -18,6 +19,7 @@ import (
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestOpenaiHandlerWithUsageDoesNotDoubleCountPromptAndInputTokens(t *testing.T) {
@@ -251,12 +253,173 @@ func TestOaiResponsesHandlerNoCacheMovesCacheReadIntoInputResponse(t *testing.T)
 
 	var body dto.OpenAIResponsesResponse
 	require.NoError(t, common.Unmarshal(w.Body.Bytes(), &body))
+	require.Greater(t, body.CreatedAt, 0)
 	require.NotNil(t, body.Usage)
 	require.Equal(t, 160, body.Usage.InputTokens)
 	require.Equal(t, 20, body.Usage.OutputTokens)
 	require.Equal(t, 180, body.Usage.TotalTokens)
 	require.NotNil(t, body.Usage.InputTokensDetails)
 	require.Equal(t, 0, body.Usage.InputTokensDetails.CachedTokens)
+}
+
+func TestOaiResponsesHandlerFillsMissingCreatedAtAndPreservesResponsesUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	const createdAt = int64(1_700_000_001)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body: io.NopCloser(strings.NewReader(`{
+			"id": "resp-created-at-test",
+			"object": "response",
+			"output": [],
+			"vendor_large_integer": 900719925474099312345,
+			"usage": {
+				"input_tokens": 88,
+				"output_tokens": 31,
+				"total_tokens": 119
+			}
+		}`)),
+	}
+
+	usage, err := OaiResponsesHandler(c, &relaycommon.RelayInfo{
+		StartTime: time.Unix(createdAt, 0),
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelName: "responses",
+		},
+	}, resp)
+
+	require.Nil(t, err)
+	require.Equal(t, 88, usage.InputTokens)
+	require.Equal(t, 88, usage.PromptTokens)
+	require.Equal(t, 31, usage.OutputTokens)
+	require.Equal(t, 31, usage.CompletionTokens)
+	require.Equal(t, 119, usage.TotalTokens)
+	body := w.Body.Bytes()
+	require.Equal(t, createdAt, gjson.GetBytes(body, "created_at").Int())
+	require.Equal(t, int64(88), gjson.GetBytes(body, "usage.input_tokens").Int())
+	require.Equal(t, int64(31), gjson.GetBytes(body, "usage.output_tokens").Int())
+	require.Equal(t, int64(119), gjson.GetBytes(body, "usage.total_tokens").Int())
+	require.False(t, gjson.GetBytes(body, "usage.prompt_tokens").Exists())
+	require.False(t, gjson.GetBytes(body, "usage.completion_tokens").Exists())
+	require.Contains(t, string(body), `"vendor_large_integer": 900719925474099312345`)
+}
+
+func TestOaiResponsesHandlerPreservesExistingCreatedAt(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	const upstreamCreatedAt = int64(1_690_000_123)
+	responseBody := `{
+		"id": "resp-existing-created-at",
+		"object": "response",
+		"created_at": 1690000123,
+		"output": [],
+		"usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
+	}`
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(responseBody)),
+	}
+
+	_, err := OaiResponsesHandler(c, &relaycommon.RelayInfo{
+		StartTime:   time.Unix(1_700_000_001, 0),
+		ChannelMeta: &relaycommon.ChannelMeta{},
+	}, resp)
+
+	require.Nil(t, err)
+	require.Equal(t, upstreamCreatedAt, gjson.GetBytes(w.Body.Bytes(), "created_at").Int())
+	require.Equal(t, responseBody, w.Body.String())
+}
+
+func TestOaiResponsesStreamHandlerFillsCreatedAtAndPreservesResponsesUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oldStreamingTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() {
+		constant.StreamingTimeout = oldStreamingTimeout
+	})
+
+	const createdAt = int64(1_700_000_001)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	sse := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp-stream-test","object":"response","status":"in_progress","output":[],"usage":null}}`,
+		`data: {"type":"response.output_text.delta","delta":"ok"}`,
+		`data: {"type":"response.completed","response":{"id":"resp-stream-test","object":"response","status":"completed","output":[],"usage":{"input_tokens":88,"output_tokens":31,"total_tokens":119}}}`,
+		`data: [DONE]`,
+	}, "\n\n")
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(sse)),
+	}
+
+	usage, err := OaiResponsesStreamHandler(c, &relaycommon.RelayInfo{
+		StartTime: time.Unix(createdAt, 0),
+		RelayMode: relayconstant.RelayModeResponses,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelName: "responses",
+		},
+	}, resp)
+
+	require.Nil(t, err)
+	require.Equal(t, 88, usage.InputTokens)
+	require.Equal(t, 88, usage.PromptTokens)
+	require.Equal(t, 31, usage.OutputTokens)
+	require.Equal(t, 31, usage.CompletionTokens)
+	require.Equal(t, 119, usage.TotalTokens)
+
+	streamEvents := responsesStreamEventsByType(w.Body.String())
+	createdEvent, ok := streamEvents["response.created"]
+	require.True(t, ok)
+	completedEvent, ok := streamEvents["response.completed"]
+	require.True(t, ok)
+	deltaEvent, ok := streamEvents["response.output_text.delta"]
+	require.True(t, ok)
+	require.Equal(t, createdAt, gjson.Get(createdEvent, "response.created_at").Int())
+	require.Equal(t, createdAt, gjson.Get(completedEvent, "response.created_at").Int())
+	require.False(t, gjson.Get(deltaEvent, "response").Exists())
+	require.False(t, gjson.Get(deltaEvent, "created_at").Exists())
+	require.Equal(t, int64(88), gjson.Get(completedEvent, "response.usage.input_tokens").Int())
+	require.Equal(t, int64(31), gjson.Get(completedEvent, "response.usage.output_tokens").Int())
+	require.Equal(t, int64(119), gjson.Get(completedEvent, "response.usage.total_tokens").Int())
+	require.False(t, gjson.Get(completedEvent, "response.usage.prompt_tokens").Exists())
+	require.False(t, gjson.Get(completedEvent, "response.usage.completion_tokens").Exists())
+}
+
+func TestEnsureResponsesCreatedAtPreservesExistingNestedValueAndSkipsDelta(t *testing.T) {
+	const fallbackCreatedAt = int64(1_700_000_001)
+	existing := []byte(`{"type":"response.created","response":{"id":"resp-test","created_at":1690000123}}`)
+	patched, effectiveCreatedAt, err := ensureResponsesCreatedAt(existing, true, fallbackCreatedAt)
+	require.NoError(t, err)
+	require.Equal(t, existing, patched)
+	require.Equal(t, int64(1_690_000_123), effectiveCreatedAt)
+
+	delta := []byte(`{"type":"response.output_text.delta","delta":"ok"}`)
+	patched, effectiveCreatedAt, err = ensureResponsesCreatedAt(delta, true, fallbackCreatedAt)
+	require.NoError(t, err)
+	require.Equal(t, delta, patched)
+	require.Zero(t, effectiveCreatedAt)
+}
+
+func responsesStreamEventsByType(body string) map[string]string {
+	events := make(map[string]string)
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data: "))
+		eventType := gjson.Get(data, "type").String()
+		if eventType != "" {
+			events[eventType] = data
+		}
+	}
+	return events
 }
 
 func TestRewriteOpenAIStreamUsageDataWithNoCacheUsage(t *testing.T) {

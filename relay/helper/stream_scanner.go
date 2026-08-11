@@ -58,6 +58,7 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 		ticker     = time.NewTicker(streamingTimeout)
 		pingTicker *time.Ticker
 		writeMutex sync.Mutex     // Mutex to protect concurrent writes
+		countMutex sync.Mutex     // Mutex to protect ReceivedResponseCount
 		wg         sync.WaitGroup // 用于等待所有 goroutine 退出
 	)
 
@@ -104,7 +105,9 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 			logger.LogError(c, "timeout waiting for goroutines to exit")
 		}
 
-		close(stopChan)
+		// stopChan is local to this stream and may still have concurrent senders
+		// finishing their deferred cleanup. Do not close it; cancellation plus the
+		// wait above is sufficient, and leaving it for GC avoids a send/close race.
 	}()
 
 	scanner.Buffer(make([]byte, InitialScannerBufferSize), getScannerBufferSize())
@@ -254,7 +257,9 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 			}
 			if !strings.HasPrefix(data, "[DONE]") {
 				info.SetFirstResponseTime()
+				countMutex.Lock()
 				info.ReceivedResponseCount++
+				countMutex.Unlock()
 
 				select {
 				case dataChan <- data:
@@ -294,6 +299,9 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 	if info.StreamStatus.IsNormalEnd() && !info.StreamStatus.HasErrors() {
 		logger.LogInfo(c, fmt.Sprintf("stream ended: %s", info.StreamStatus.Summary()))
 	} else {
-		logger.LogError(c, fmt.Sprintf("stream ended: %s, received=%d", info.StreamStatus.Summary(), info.ReceivedResponseCount))
+		countMutex.Lock()
+		receivedResponseCount := info.ReceivedResponseCount
+		countMutex.Unlock()
+		logger.LogError(c, fmt.Sprintf("stream ended: %s, received=%d", info.StreamStatus.Summary(), receivedResponseCount))
 	}
 }
