@@ -118,7 +118,9 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 
 func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
 	info.FinalRequestRelayFormat = types.RelayFormatClaude
-	if info.IsStream {
+	if info.ForceStreamBuffer && channel.IsEventStreamResponse(resp) {
+		return ClaudeStreamBufferHandler(c, resp, info)
+	} else if info.IsStream {
 		return ClaudeStreamHandler(c, resp, info)
 	} else {
 		return ClaudeHandler(c, resp, info)

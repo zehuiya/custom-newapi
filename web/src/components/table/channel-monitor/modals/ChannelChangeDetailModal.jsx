@@ -33,6 +33,7 @@ const hasOwn = (value, key) =>
 const BOOLEAN_FIELD_NAMES = new Set([
   'auto_ban',
   'force_format',
+  'force_stream',
   'pass_through_body_enabled',
   'system_prompt_override',
   'is_multi_key',

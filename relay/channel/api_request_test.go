@@ -210,3 +210,28 @@ func TestApplyRuntimeHeaderDeletionsIsCaseInsensitiveAndClearsHost(t *testing.T)
 	}
 	require.Empty(t, upstreamReq.Host)
 }
+
+func TestSetupApiRequestHeader_ForceStreamOverridesClientAccept(t *testing.T) {
+	t.Parallel()
+
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	ctx.Request.Header.Set("Accept", "application/json")
+	info := &relaycommon.RelayInfo{ForceStreamUpstream: true}
+	header := make(http.Header)
+
+	SetupApiRequestHeader(info, ctx, &header)
+
+	require.Equal(t, "application/json", header.Get("Content-Type"))
+	require.Equal(t, "text/event-stream", header.Get("Accept"))
+}
+
+func TestApplyForceStreamAccept_OverridesHeaderOverride(t *testing.T) {
+	t.Parallel()
+
+	header := http.Header{"Accept": []string{"application/json"}}
+	applyForceStreamAccept(&header, &relaycommon.RelayInfo{ForceStreamUpstream: true})
+	require.Equal(t, "text/event-stream", header.Get("Accept"))
+}

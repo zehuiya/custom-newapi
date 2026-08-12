@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
+	relaychannel "github.com/QuantumNous/new-api/relay/channel"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
@@ -18,6 +20,55 @@ import (
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
+
+type bufferedResponsesEvent struct {
+	Type     string          `json:"type"`
+	Response json.RawMessage `json:"response,omitempty"`
+	Error    any             `json:"error,omitempty"`
+}
+
+// BufferResponsesStream consumes a Responses SSE stream and returns the raw
+// terminal response object. Keeping the raw nested JSON preserves provider
+// extensions that are not represented by the local response DTO.
+func BufferResponsesStream(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*http.Response, *types.NewAPIError) {
+	var responseBody []byte
+	err := relaychannel.ConsumeBufferedSSE(c, resp, info, func(data string) (bool, error) {
+		var event bufferedResponsesEvent
+		if err := common.UnmarshalJsonStr(data, &event); err != nil {
+			return false, err
+		}
+		switch event.Type {
+		case "response.completed", "response.incomplete", "response.failed":
+			if len(event.Response) == 0 || string(event.Response) == "null" {
+				return false, fmt.Errorf("responses terminal event is missing response")
+			}
+			responseBody = append(responseBody[:0], event.Response...)
+			return true, nil
+		case "error":
+			if oaiErr := dto.GetOpenAIError(event.Error); oaiErr != nil {
+				return false, fmt.Errorf("upstream responses stream error: %s", oaiErr.Message)
+			}
+			return false, fmt.Errorf("upstream responses stream error")
+		default:
+			return false, nil
+		}
+	})
+	if err != nil {
+		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+	}
+	if len(responseBody) == 0 {
+		return nil, types.NewOpenAIError(fmt.Errorf("responses stream ended without a terminal response"), types.ErrorCodeBadResponse, http.StatusBadGateway)
+	}
+	return relaychannel.BufferedJSONResponse(resp, responseBody), nil
+}
+
+func OaiResponsesBufferHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+	bufferedResponse, newAPIError := BufferResponsesStream(c, info, resp)
+	if newAPIError != nil {
+		return nil, newAPIError
+	}
+	return OaiResponsesHandler(c, info, bufferedResponse)
+}
 
 func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	defer service.CloseResponseBodyGracefully(resp)

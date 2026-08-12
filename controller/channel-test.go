@@ -238,6 +238,7 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 
 	info.IsChannelTest = true
 	info.InitChannelMeta(c)
+	relay.ApplyForceStream(info, request)
 
 	err = attachTestBillingRequestInput(info, request)
 	if err != nil {
@@ -415,6 +416,14 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 				localErr:    err,
 				newAPIError: types.NewError(err, types.ErrorCodeChannelParamOverrideInvalid),
 			}
+		}
+	}
+	jsonData, err = relay.ApplyForceStreamBody(info, jsonData)
+	if err != nil {
+		return testResult{
+			context:     c,
+			localErr:    err,
+			newAPIError: types.NewError(err, types.ErrorCodeConvertRequestFailed),
 		}
 	}
 

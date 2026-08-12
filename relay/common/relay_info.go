@@ -92,6 +92,8 @@ type RelayInfo struct {
 	isFirstResponse   bool
 	//SendLastReasoningResponse bool
 	IsStream               bool
+	ForceStreamUpstream    bool // this attempt must stay streaming after conversion and overrides
+	ForceStreamBuffer      bool // client requested non-stream while this attempt is forced upstream-streaming
 	IsGeminiBatchEmbedding bool
 	IsPlayground           bool
 	UsePrice               bool
@@ -189,6 +191,10 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 	info.RuntimeHeadersOverride = nil
 	info.RuntimeHeadersToDelete = nil
 	info.UseRuntimeHeadersOverride = false
+	// This state belongs to one channel attempt. A retry onto a normal channel
+	// must not inherit forced-stream buffering from the previous channel.
+	info.ForceStreamUpstream = false
+	info.ForceStreamBuffer = false
 
 	channelType := common.GetContextKeyInt(c, constant.ContextKeyChannelType)
 	paramOverride := common.GetContextKeyStringMap(c, constant.ContextKeyChannelParamOverride)

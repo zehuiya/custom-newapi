@@ -50,6 +50,7 @@ export const CHANNEL_AUDIT_FIELD_LABELS = {
   settings: '其他设置',
   multi_key_mode: '密钥聚合模式',
   force_format: '强制格式化',
+  force_stream: '强制流式传输',
   proxy: '代理地址',
   pass_through_body_enabled: '透传请求体',
   system_prompt: '系统提示词',

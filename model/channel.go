@@ -1363,6 +1363,9 @@ func (channel *Channel) ValidateSettings() error {
 		if cacheModeCount > 1 {
 			return errors.New("cache_enabled, no_cache_enabled, and cache_reduction_enabled are mutually exclusive")
 		}
+		if channelParams.ForceStream && channelParams.PassThroughBodyEnabled {
+			return errors.New("force_stream and pass_through_body_enabled are mutually exclusive")
+		}
 		if channelParams.CacheEnabled || channelParams.CachePercentageMin != nil || channelParams.CachePercentageMax != nil {
 			minPercentage, maxPercentage := channelParams.GetCachePercentageRange()
 			if minPercentage < 0 || minPercentage > 100 {

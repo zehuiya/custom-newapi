@@ -183,6 +183,7 @@ const CHANNEL_CHANGE_FIELDS = [
     valueType: 'fallbackChannels',
   },
   { key: 'force_format', label: '强制格式化', valueType: 'boolean' },
+  { key: 'force_stream', label: '强制流式传输', valueType: 'boolean' },
   {
     key: 'pass_through_body_enabled',
     label: '透传请求体',
@@ -521,6 +522,7 @@ const EditChannelModal = (props) => {
     multi_key_mode: 'random',
     // 渠道额外设置的默认值
     force_format: false,
+    force_stream: false,
     proxy: '',
     pass_through_body_enabled: false,
     responses_enabled: true,
@@ -852,7 +854,13 @@ const EditChannelModal = (props) => {
 
   // 处理渠道额外设置的更新
   const handleChannelSettingsChange = (key, value) => {
-    applyChannelSettingsChanges({ [key]: value });
+    const updates = { [key]: value };
+    if (value && key === 'force_stream') {
+      updates.pass_through_body_enabled = false;
+    } else if (value && key === 'pass_through_body_enabled') {
+      updates.force_stream = false;
+    }
+    applyChannelSettingsChanges(updates);
   };
 
   const handleCacheModeChange = (key, value) => {
@@ -1197,6 +1205,7 @@ const EditChannelModal = (props) => {
         try {
           const parsedSettings = JSON.parse(data.setting);
           data.force_format = parsedSettings.force_format || false;
+          data.force_stream = parsedSettings.force_stream === true;
           data.proxy = parsedSettings.proxy || '';
           data.pass_through_body_enabled =
             parsedSettings.pass_through_body_enabled || false;
@@ -1235,6 +1244,7 @@ const EditChannelModal = (props) => {
         } catch (error) {
           console.error('解析渠道设置失败:', error);
           data.force_format = false;
+          data.force_stream = false;
           data.proxy = '';
           data.pass_through_body_enabled = false;
           data.responses_enabled = true;
@@ -1250,6 +1260,7 @@ const EditChannelModal = (props) => {
         }
       } else {
         data.force_format = false;
+        data.force_stream = false;
         data.proxy = '';
         data.pass_through_body_enabled = false;
         data.responses_enabled = true;
@@ -1413,6 +1424,7 @@ const EditChannelModal = (props) => {
         data.pass_through_body_enabled ||
         data.responses_enabled === false ||
         data.force_format ||
+        data.force_stream ||
         data.cache_enabled ||
         data.no_cache_enabled ||
         data.cache_reduction_enabled ||
@@ -2256,6 +2268,7 @@ const EditChannelModal = (props) => {
     const channelExtraSettings = {
       ...existingChannelExtraSettings,
       force_format: localInputs.force_format || false,
+      force_stream: localInputs.force_stream === true,
       proxy: localInputs.proxy || '',
       pass_through_body_enabled: localInputs.pass_through_body_enabled || false,
       responses_enabled: localInputs.responses_enabled !== false,
@@ -2358,6 +2371,7 @@ const EditChannelModal = (props) => {
 
     // 清理不需要发送到后端的字段
     delete localInputs.force_format;
+    delete localInputs.force_stream;
     delete localInputs.proxy;
     delete localInputs.pass_through_body_enabled;
     delete localInputs.responses_enabled;
@@ -3351,6 +3365,21 @@ const EditChannelModal = (props) => {
                       }
                       extraText={t(
                         '强制将响应格式化为 OpenAI 标准格式（只适用于OpenAI渠道类型）',
+                      )}
+                    />
+                  )}
+
+                  {[1, 3, 8, 14].includes(inputs.type) && (
+                    <Form.Switch
+                      field='force_stream'
+                      label={t('强制流式传输')}
+                      checkedText={t('开')}
+                      uncheckedText={t('关')}
+                      onChange={(value) =>
+                        handleChannelSettingsChange('force_stream', value)
+                      }
+                      extraText={t(
+                        '始终向上游发送流式请求；客户端请求非流式时，服务端会聚合完整响应后返回。与透传请求体互斥。',
                       )}
                     />
                   )}

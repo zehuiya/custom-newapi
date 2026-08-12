@@ -1468,6 +1468,8 @@
     "强制使用 AUTH LOGIN": "Buộc AUTH LOGIN",
     "强制将响应格式化为 OpenAI 标准格式（只适用于OpenAI渠道类型）": "Buộc định dạng phản hồi theo định dạng chuẩn OpenAI (Chỉ dành cho các loại kênh OpenAI)",
     "强制格式化": "Buộc định dạng",
+    "强制流式传输": "Buộc truyền phát trực tuyến",
+    "始终向上游发送流式请求；客户端请求非流式时，服务端会聚合完整响应后返回。与透传请求体互斥。": "Luôn gửi yêu cầu dạng luồng tới upstream. Với client không dùng luồng, máy chủ sẽ gom toàn bộ phản hồi trước khi trả về. Không thể dùng cùng chế độ chuyển tiếp nguyên trạng thân yêu cầu.",
     "强制要求": "Yêu cầu bắt buộc",
     "强变换": "Biến thể thấp",
     "当上游通道返回错误中包含这些关键词时（不区分大小写），自动禁用通道": "Khi kênh thượng nguồn trả về lỗi chứa các từ khóa này (không phân biệt chữ hoa chữ thường), tự động vô hiệu hóa kênh",

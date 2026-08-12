@@ -31,6 +31,13 @@ func TestValidateSettingsDoesNotRewriteSettingsWithoutRetiredField(t *testing.T)
 	require.Equal(t, rawSetting, *channel.Setting)
 }
 
+func TestValidateSettingsRejectsForceStreamWithPassThrough(t *testing.T) {
+	rawSetting := `{"force_stream":true,"pass_through_body_enabled":true}`
+	channel := Channel{Setting: &rawSetting}
+
+	require.ErrorContains(t, channel.ValidateSettings(), "force_stream and pass_through_body_enabled are mutually exclusive")
+}
+
 func TestGetSettingIgnoresRetiredThinkingToContent(t *testing.T) {
 	rawSetting := `{"thinking_to_content":true,"proxy":"socks5://127.0.0.1:1080"}`
 	channel := Channel{Setting: &rawSetting}

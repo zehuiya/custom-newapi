@@ -1490,6 +1490,8 @@
     "强制使用 AUTH LOGIN": "Force AUTH LOGIN",
     "强制将响应格式化为 OpenAI 标准格式（只适用于OpenAI渠道类型）": "Force format responses to OpenAI standard format (Only for OpenAI channel types)",
     "强制格式化": "Force format",
+    "强制流式传输": "Force streaming",
+    "始终向上游发送流式请求；客户端请求非流式时，服务端会聚合完整响应后返回。与透传请求体互斥。": "Always send a streaming request upstream. For non-streaming clients, the server buffers the complete response before returning it. Mutually exclusive with request body passthrough.",
     "强制要求": "Mandatory requirement",
     "强变换": "Low Variation",
     "当上游通道返回错误中包含这些关键词时（不区分大小写），自动禁用通道": "When the upstream channel returns an error containing these keywords (not case-sensitive), automatically disable the channel",

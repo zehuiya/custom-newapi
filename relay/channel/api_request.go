@@ -33,9 +33,17 @@ func SetupApiRequestHeader(info *common.RelayInfo, c *gin.Context, req *http.Hea
 	} else {
 		req.Set("Content-Type", c.Request.Header.Get("Content-Type"))
 		req.Set("Accept", c.Request.Header.Get("Accept"))
-		if info.IsStream && c.Request.Header.Get("Accept") == "" {
+		if info.ForceStreamUpstream {
+			applyForceStreamAccept(req, info)
+		} else if info.IsStream && c.Request.Header.Get("Accept") == "" {
 			req.Set("Accept", "text/event-stream")
 		}
+	}
+}
+
+func applyForceStreamAccept(header *http.Header, info *common.RelayInfo) {
+	if header != nil && info != nil && info.ForceStreamUpstream {
+		header.Set("Accept", "text/event-stream")
 	}
 }
 
@@ -344,6 +352,7 @@ func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 	}
 	applyHeaderOverrideToRequest(req, headerOverride)
 	applyRuntimeHeaderDeletionsToRequest(req, info)
+	applyForceStreamAccept(&req.Header, info)
 	resp, err := doRequest(c, req, info)
 	if err != nil {
 		return nil, fmt.Errorf("do request failed: %w", err)

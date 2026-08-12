@@ -87,7 +87,7 @@ func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayIn
 	//		println(fmt.Sprintf("failed to save request body to file: %v", err))
 	//	}
 	//}
-	if info.SupportStreamOptions && info.IsStream {
+	if info.SupportStreamOptions && lo.FromPtrOr(aiRequest.Stream, false) {
 		aiRequest.StreamOptions = &dto.StreamOptions{
 			IncludeUsage: true,
 		}
@@ -622,7 +622,9 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 	case relayconstant.RelayModeRerank:
 		usage, err = common_handler.RerankHandler(c, info, resp)
 	case relayconstant.RelayModeResponses:
-		if info.IsStream {
+		if info.ForceStreamBuffer && channel.IsEventStreamResponse(resp) {
+			usage, err = OaiResponsesBufferHandler(c, info, resp)
+		} else if info.IsStream {
 			usage, err = OaiResponsesStreamHandler(c, info, resp)
 		} else {
 			usage, err = OaiResponsesHandler(c, info, resp)
@@ -630,7 +632,9 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 	case relayconstant.RelayModeResponsesCompact:
 		usage, err = OaiResponsesCompactionHandler(c, info, resp)
 	default:
-		if info.IsStream {
+		if info.ForceStreamBuffer && channel.IsEventStreamResponse(resp) {
+			usage, err = OaiStreamBufferHandler(c, info, resp)
+		} else if info.IsStream {
 			usage, err = OaiStreamHandler(c, info, resp)
 		} else {
 			usage, err = OpenaiHandler(c, info, resp)
