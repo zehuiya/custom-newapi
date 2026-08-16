@@ -2,6 +2,9 @@ package billing_setting
 
 import (
 	"fmt"
+	"math"
+	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	"github.com/QuantumNous/new-api/setting/config"
@@ -71,14 +74,45 @@ func smokeTestExpr(exprStr string) error {
 
 	for _, v := range vectors {
 		for _, request := range requests {
-			result, _, err := billingexpr.RunExprWithRequest(exprStr, v, request)
-			if err != nil {
-				return fmt.Errorf("vector {p=%g, c=%g}: run failed: %w", v.P, v.C, err)
-			}
-			if result < 0 {
-				return fmt.Errorf("vector {p=%g, c=%g}: result %f < 0", v.P, v.C, result)
+			if err := validateSmokeTestResult(exprStr, v, request); err != nil {
+				return err
 			}
 		}
+	}
+
+	// A time-based expression may hide an invalid branch until that price window
+	// becomes active. Validate every Beijing minute when time functions are used.
+	if strings.Contains(exprStr, "hour(") || strings.Contains(exprStr, "minute(") {
+		beijing := time.FixedZone("Asia/Shanghai", 8*60*60)
+		dayStart := time.Date(2026, time.January, 1, 0, 0, 0, 0, beijing)
+		allDimensions := billingexpr.TokenParams{
+			P: 1000, C: 1000, CR: 100, CC: 100, CC1h: 100,
+			Img: 100, ImgO: 100, AI: 100, AO: 100,
+		}
+		for minuteOfDay := 0; minuteOfDay < 24*60; minuteOfDay++ {
+			request := requestInputAt(dayStart.Add(time.Duration(minuteOfDay) * time.Minute))
+			if err := validateSmokeTestResult(exprStr, allDimensions, request); err != nil {
+				return fmt.Errorf("Beijing time %02d:%02d: %w", minuteOfDay/60, minuteOfDay%60, err)
+			}
+		}
+	}
+	return nil
+}
+
+func requestInputAt(at time.Time) billingexpr.RequestInput {
+	return billingexpr.RequestInput{EvaluationTimeUnixMilli: at.UnixMilli()}
+}
+
+func validateSmokeTestResult(exprStr string, params billingexpr.TokenParams, request billingexpr.RequestInput) error {
+	result, _, err := billingexpr.RunExprWithRequest(exprStr, params, request)
+	if err != nil {
+		return fmt.Errorf("vector {p=%g, c=%g}: run failed: %w", params.P, params.C, err)
+	}
+	if math.IsNaN(result) || math.IsInf(result, 0) {
+		return fmt.Errorf("vector {p=%g, c=%g}: result %f is not finite", params.P, params.C, result)
+	}
+	if result < 0 {
+		return fmt.Errorf("vector {p=%g, c=%g}: result %f < 0", params.P, params.C, result)
 	}
 	return nil
 }

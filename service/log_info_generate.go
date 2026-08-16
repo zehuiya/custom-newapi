@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/base64"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -13,6 +14,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+var billingLogBeijingLocation = time.FixedZone("Asia/Shanghai", 8*60*60)
 
 func appendRequestPath(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
 	if other == nil {
@@ -300,6 +303,11 @@ func InjectTieredBillingInfo(other map[string]interface{}, relayInfo *relaycommo
 	}
 	other["billing_mode"] = "tiered_expr"
 	other["expr_b64"] = base64.StdEncoding.EncodeToString([]byte(snap.ExprString))
+	if snap.BillingTimeUnixMilli > 0 {
+		billingTime := time.UnixMilli(snap.BillingTimeUnixMilli).In(billingLogBeijingLocation)
+		other["billing_time"] = billingTime.Format(time.RFC3339)
+		other["billing_timezone"] = "Asia/Shanghai"
+	}
 	if result != nil {
 		other["matched_tier"] = result.MatchedTier
 	}

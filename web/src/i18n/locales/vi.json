@@ -4273,6 +4273,21 @@
     "支持 /v1/responses": "Hỗ trợ /v1/responses",
     "关闭后，/v1/responses 请求不会调度到此渠道；未配置时默认支持": "Khi tắt, yêu cầu /v1/responses sẽ không được định tuyến đến kênh này. Các kênh hiện có được hỗ trợ theo mặc định.",
     "/v1/responses 请求不会调度到该渠道；其他接口不受影响。": "Yêu cầu /v1/responses sẽ không được định tuyến đến kênh này; các giao diện khác không bị ảnh hưởng.",
-    "不支持 Responses": "Đã tắt Responses"
+    "不支持 Responses": "Đã tắt Responses",
+    "计费时间：{{time}}（北京时间）": "Thời gian tính phí: {{time}} (giờ Bắc Kinh)",
+    "时间段 {{n}}": "Khung giờ {{n}}",
+    "北京时间范围": "Khoảng giờ Bắc Kinh",
+    "所有时间固定使用北京时间，区间包含开始时间、不包含结束时间；支持跨午夜。未命中时使用默认价格。": "Tất cả thời gian dùng giờ Bắc Kinh. Khoảng thời gian bao gồm giờ bắt đầu, không gồm giờ kết thúc và hỗ trợ qua nửa đêm. Giá mặc định áp dụng khi không khớp.",
+    "添加时间段": "Thêm khung giờ",
+    "其他时间默认价格": "Giá mặc định cho thời gian khác",
+    "阶梯维度": "Tiêu chí phân tầng",
+    "按输入长度": "Theo độ dài đầu vào",
+    "按北京时间段": "Theo khung giờ Bắc Kinh",
+    "估算时间（北京时间）": "Thời gian ước tính (giờ Bắc Kinh)",
+    "模型 {{name}} 的计费配置无效：{{error}}": "Cấu hình tính phí của mô hình {{name}} không hợp lệ: {{error}}",
+    "请至少添加一个时间段": "Hãy thêm ít nhất một khung giờ",
+    "第 {{n}} 个时间段格式不正确": "Định dạng khung giờ {{n}} không hợp lệ",
+    "第 {{n}} 个时间段的开始和结束时间不能相同": "Giờ bắt đầu và kết thúc của khung {{n}} phải khác nhau",
+    "第 {{left}} 个和第 {{right}} 个时间段存在重叠": "Khung giờ {{left}} và {{right}} bị chồng lấn"
   }
 }

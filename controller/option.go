@@ -8,6 +8,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/console_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -112,6 +113,29 @@ type OptionUpdateRequest struct {
 	Value any    `json:"value"`
 }
 
+func validateBillingExprOption(rawValue string) error {
+	var expressions map[string]string
+	if err := common.UnmarshalJsonStr(rawValue, &expressions); err != nil {
+		return fmt.Errorf("计费表达式配置不是有效的 JSON: %w", err)
+	}
+	validatedExpressions := make(map[string]error, len(expressions))
+	for modelName, expression := range expressions {
+		expression = strings.TrimSpace(expression)
+		if expression == "" {
+			continue
+		}
+		err, validated := validatedExpressions[expression]
+		if !validated {
+			err = billing_setting.SmokeTestExpr(expression)
+			validatedExpressions[expression] = err
+		}
+		if err != nil {
+			return fmt.Errorf("模型 %s 的计费表达式无效: %w", modelName, err)
+		}
+	}
+	return nil
+}
+
 func UpdateOption(c *gin.Context) {
 	var option OptionUpdateRequest
 	err := common.DecodeJson(c.Request.Body, &option)
@@ -200,6 +224,15 @@ func UpdateOption(c *gin.Context) {
 		}
 	case "GroupRatio":
 		err = ratio_setting.CheckGroupRatio(option.Value.(string))
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
+	case "billing_setting.billing_expr":
+		err = validateBillingExprOption(option.Value.(string))
 		if err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,

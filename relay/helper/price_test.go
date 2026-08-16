@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
@@ -46,6 +47,7 @@ func TestModelPriceHelperTieredUsesPreloadedRequestInput(t *testing.T) {
 		OriginModelName: "tiered-test-model",
 		UserGroup:       "default",
 		UsingGroup:      "default",
+		StartTime:       time.UnixMilli(1_786_803_600_000),
 		RequestHeaders:  map[string]string{"Content-Type": "application/json"},
 		BillingRequestInput: &billingexpr.RequestInput{
 			Headers: map[string]string{"Content-Type": "application/json"},
@@ -60,6 +62,41 @@ func TestModelPriceHelperTieredUsesPreloadedRequestInput(t *testing.T) {
 	require.Equal(t, "stream", info.TieredBillingSnapshot.EstimatedTier)
 	require.Equal(t, billing_setting.BillingModeTieredExpr, info.TieredBillingSnapshot.BillingMode)
 	require.Equal(t, common.QuotaPerUnit, info.TieredBillingSnapshot.QuotaPerUnit)
+	require.Equal(t, info.StartTime.UnixMilli(), info.TieredBillingSnapshot.BillingTimeUnixMilli)
+}
+
+func TestModelPriceHelperTieredAlwaysFreezesBillingTime(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	saved := map[string]string{}
+	require.NoError(t, config.GlobalConfig.SaveToDB(func(key, value string) error {
+		saved[key] = value
+		return nil
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, config.GlobalConfig.LoadFromDB(saved))
+	})
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+		"billing_setting.billing_mode": `{"tiered-time-fallback":"tiered_expr"}`,
+		"billing_setting.billing_expr": `{"tiered-time-fallback":"tier(\"base\", p * 1)"}`,
+	}))
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	ctx.Set("group", "default")
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "tiered-time-fallback",
+		UserGroup:       "default",
+		UsingGroup:      "default",
+	}
+
+	before := time.Now().UnixMilli()
+	_, err := ModelPriceHelper(ctx, info, 1000, &types.TokenCountMeta{})
+	after := time.Now().UnixMilli()
+	require.NoError(t, err)
+	require.NotNil(t, info.TieredBillingSnapshot)
+	require.GreaterOrEqual(t, info.TieredBillingSnapshot.BillingTimeUnixMilli, before)
+	require.LessOrEqual(t, info.TieredBillingSnapshot.BillingTimeUnixMilli, after)
 }
 
 func TestModelPriceHelperKeepsConfiguredImageBasePriceAndAppliesRequestRatio(t *testing.T) {

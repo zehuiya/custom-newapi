@@ -11,6 +11,8 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+var beijingLocation = time.FixedZone("Asia/Shanghai", 8*60*60)
+
 // RunExpr compiles (with cache) and executes an expression string.
 // The environment exposes:
 //   - p, c             — prompt / completion tokens
@@ -50,17 +52,21 @@ func RunExprByHashWithRequest(exprStr, hash string, params TokenParams, request 
 func runProgram(prog *vm.Program, params TokenParams, request RequestInput) (float64, TraceResult, error) {
 	trace := TraceResult{}
 	headers := normalizeHeaders(request.Headers)
+	evaluationTime := time.Now()
+	if request.EvaluationTimeUnixMilli > 0 {
+		evaluationTime = time.UnixMilli(request.EvaluationTimeUnixMilli)
+	}
 
 	env := map[string]interface{}{
-		"p":    params.P,
-		"c":    params.C,
-		"cr":   params.CR,
-		"cc":   params.CC,
-		"cc1h": params.CC1h,
-		"img":  params.Img,
+		"p":     params.P,
+		"c":     params.C,
+		"cr":    params.CR,
+		"cc":    params.CC,
+		"cc1h":  params.CC1h,
+		"img":   params.Img,
 		"img_o": params.ImgO,
-		"ai":   params.AI,
-		"ao":   params.AO,
+		"ai":    params.AI,
+		"ao":    params.AO,
 		"tier": func(name string, value float64) float64 {
 			trace.MatchedTier = name
 			trace.Cost = value
@@ -86,16 +92,16 @@ func runProgram(prog *vm.Program, params TokenParams, request RequestInput) (flo
 			}
 			return strings.Contains(fmt.Sprint(source), substr)
 		},
-		"hour":    func(tz string) int { return timeInZone(tz).Hour() },
-		"minute":  func(tz string) int { return timeInZone(tz).Minute() },
-		"weekday": func(tz string) int { return int(timeInZone(tz).Weekday()) },
-		"month":   func(tz string) int { return int(timeInZone(tz).Month()) },
-		"day":     func(tz string) int { return timeInZone(tz).Day() },
+		"hour":    func(tz string) int { return timeInZone(evaluationTime, tz).Hour() },
+		"minute":  func(tz string) int { return timeInZone(evaluationTime, tz).Minute() },
+		"weekday": func(tz string) int { return int(timeInZone(evaluationTime, tz).Weekday()) },
+		"month":   func(tz string) int { return int(timeInZone(evaluationTime, tz).Month()) },
+		"day":     func(tz string) int { return timeInZone(evaluationTime, tz).Day() },
 		"max":     math.Max,
-		"min":   math.Min,
-		"abs":   math.Abs,
-		"ceil":  math.Ceil,
-		"floor": math.Floor,
+		"min":     math.Min,
+		"abs":     math.Abs,
+		"ceil":    math.Ceil,
+		"floor":   math.Floor,
 	}
 
 	out, err := expr.Run(prog, env)
@@ -109,16 +115,19 @@ func runProgram(prog *vm.Program, params TokenParams, request RequestInput) (flo
 	return f, trace, nil
 }
 
-func timeInZone(tz string) time.Time {
+func timeInZone(now time.Time, tz string) time.Time {
 	tz = strings.TrimSpace(tz)
 	if tz == "" {
-		return time.Now().UTC()
+		return now.UTC()
+	}
+	if tz == "Asia/Shanghai" {
+		return now.In(beijingLocation)
 	}
 	loc, err := time.LoadLocation(tz)
 	if err != nil {
-		return time.Now().UTC()
+		return now.UTC()
 	}
-	return time.Now().In(loc)
+	return now.In(loc)
 }
 
 func normalizeHeaders(headers map[string]string) map[string]string {

@@ -4015,6 +4015,21 @@
     "支持 /v1/responses": "Support /v1/responses",
     "关闭后，/v1/responses 请求不会调度到此渠道；未配置时默认支持": "When disabled, /v1/responses requests will not be routed to this channel. Existing channels are supported by default.",
     "/v1/responses 请求不会调度到该渠道；其他接口不受影响。": "/v1/responses requests will not be routed to this channel; other endpoints are unaffected.",
-    "不支持 Responses": "Responses disabled"
+    "不支持 Responses": "Responses disabled",
+    "计费时间：{{time}}（北京时间）": "Billing time: {{time}} (Beijing Time)",
+    "时间段 {{n}}": "Time range {{n}}",
+    "北京时间范围": "Beijing time range",
+    "所有时间固定使用北京时间，区间包含开始时间、不包含结束时间；支持跨午夜。未命中时使用默认价格。": "All times use Beijing Time. Ranges include the start and exclude the end; overnight ranges are supported. Default prices apply when no range matches.",
+    "添加时间段": "Add time range",
+    "其他时间默认价格": "Default price for other times",
+    "阶梯维度": "Tier dimension",
+    "按输入长度": "By input length",
+    "按北京时间段": "By Beijing time range",
+    "估算时间（北京时间）": "Estimate time (Beijing Time)",
+    "模型 {{name}} 的计费配置无效：{{error}}": "Invalid billing configuration for model {{name}}: {{error}}",
+    "请至少添加一个时间段": "Add at least one time range",
+    "第 {{n}} 个时间段格式不正确": "Time range {{n}} has an invalid format",
+    "第 {{n}} 个时间段的开始和结束时间不能相同": "Start and end times of range {{n}} must differ",
+    "第 {{left}} 个和第 {{right}} 个时间段存在重叠": "Time ranges {{left}} and {{right}} overlap"
   }
 }

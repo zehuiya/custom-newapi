@@ -6,8 +6,9 @@ import (
 )
 
 type RequestInput struct {
-	Headers map[string]string
-	Body    []byte
+	Headers                 map[string]string
+	Body                    []byte
+	EvaluationTimeUnixMilli int64
 }
 
 // TokenParams holds all token dimensions passed into an Expr evaluation.
@@ -46,6 +47,7 @@ type BillingSnapshot struct {
 	EstimatedQuotaBeforeGroup float64 `json:"estimated_quota_before_group"`
 	EstimatedQuotaAfterGroup  int     `json:"estimated_quota_after_group"`
 	EstimatedTier             string  `json:"estimated_tier"`
+	BillingTimeUnixMilli      int64   `json:"billing_time_unix_milli"`
 	QuotaPerUnit              float64 `json:"quota_per_unit"`
 	ExprVersion               int     `json:"expr_version"`
 }

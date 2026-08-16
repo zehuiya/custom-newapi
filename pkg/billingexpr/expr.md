@@ -81,6 +81,8 @@ Powered by [expr-lang/expr](https://github.com/expr-lang/expr). Expressions are 
 | `weekday` | `weekday(tz) → int` | Day of week (0=Sunday, 6=Saturday) |
 | `month` | `month(tz) → int` | Month (1-12) |
 | `day` | `day(tz) → int` | Day of month (1-31) |
+
+Time functions use one timestamp captured when the request enters billing. Pre-consume and final settlement therefore select the same time tier even when a long-running request crosses a range boundary. Beijing time pricing should use `Asia/Shanghai`; visual time ranges use `[start, end)` semantics.
 | `max` | `max(a, b) → float64` | Math max |
 | `min` | `min(a, b) → float64` | Math min |
 | `abs` | `abs(x) → float64` | Absolute value |

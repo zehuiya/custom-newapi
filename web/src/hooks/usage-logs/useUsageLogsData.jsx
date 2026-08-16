@@ -22,7 +22,6 @@ import { useTranslation } from 'react-i18next';
 import { Modal } from '@douyinfe/semi-ui';
 import {
   API,
-  getTodayStartTimestamp,
   isAdmin,
   showError,
   showSuccess,
@@ -94,6 +93,8 @@ export const useLogsData = () => {
   // Form state
   const [formApi, setFormApi] = useState(null);
   let now = new Date();
+  const defaultStartTimestamp = now.getTime() / 1000 - 3600;
+  const defaultEndTimestamp = now.getTime() / 1000 + 3600;
   const formInitValues = {
     username: '',
     token_name: '',
@@ -102,8 +103,8 @@ export const useLogsData = () => {
     group: '',
     request_id: '',
     dateRange: [
-      timestamp2string(getTodayStartTimestamp()),
-      timestamp2string(now.getTime() / 1000 + 3600),
+      timestamp2string(defaultStartTimestamp),
+      timestamp2string(defaultEndTimestamp),
     ],
     logType: '0',
   };
@@ -236,8 +237,8 @@ export const useLogsData = () => {
   const getFormValues = () => {
     const formValues = formApi ? formApi.getValues() : {};
 
-    let start_timestamp = timestamp2string(getTodayStartTimestamp());
-    let end_timestamp = timestamp2string(now.getTime() / 1000 + 3600);
+    let start_timestamp = timestamp2string(defaultStartTimestamp);
+    let end_timestamp = timestamp2string(defaultEndTimestamp);
 
     if (
       formValues.dateRange &&

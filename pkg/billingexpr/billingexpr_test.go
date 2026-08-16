@@ -1,11 +1,15 @@
 package billingexpr_test
 
 import (
+	"fmt"
 	"math"
 	"math/rand"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
+	"github.com/stretchr/testify/require"
 )
 
 // ---------------------------------------------------------------------------
@@ -945,6 +949,135 @@ func TestTimeFunctions_MonthDayPattern(t *testing.T) {
 	// Either 1000 (not Jan 1) or 500 (Jan 1) — both are valid
 	if cost != 1000 && cost != 500 {
 		t.Errorf("cost = %f, want 1000 or 500", cost)
+	}
+}
+
+func TestTimePricingUsesFrozenBeijingEvaluationTime(t *testing.T) {
+	exprStr := `(hour("Asia/Shanghai") * 60 + minute("Asia/Shanghai")) >= 600 && (hour("Asia/Shanghai") * 60 + minute("Asia/Shanghai")) < 720 ? tier("10:00-12:00", p * 1) : (hour("Asia/Shanghai") * 60 + minute("Asia/Shanghai")) >= 840 && (hour("Asia/Shanghai") * 60 + minute("Asia/Shanghai")) < 1080 ? tier("14:00-18:00", p * 2) : tier("default", p * 3)`
+	beijing := time.FixedZone("Asia/Shanghai", 8*60*60)
+	tests := []struct {
+		name     string
+		hour     int
+		minute   int
+		wantTier string
+		wantCost float64
+	}{
+		{name: "before first range", hour: 9, minute: 59, wantTier: "default", wantCost: 300},
+		{name: "first range start", hour: 10, minute: 0, wantTier: "10:00-12:00", wantCost: 100},
+		{name: "inside first range", hour: 11, minute: 59, wantTier: "10:00-12:00", wantCost: 100},
+		{name: "first range end", hour: 12, minute: 0, wantTier: "default", wantCost: 300},
+		{name: "second range start", hour: 14, minute: 0, wantTier: "14:00-18:00", wantCost: 200},
+		{name: "inside second range", hour: 17, minute: 59, wantTier: "14:00-18:00", wantCost: 200},
+		{name: "second range end", hour: 18, minute: 0, wantTier: "default", wantCost: 300},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			at := time.Date(2026, time.August, 15, tt.hour, tt.minute, 0, 0, beijing)
+			cost, trace, err := billingexpr.RunExprWithRequest(exprStr, billingexpr.TokenParams{P: 100}, billingexpr.RequestInput{
+				EvaluationTimeUnixMilli: at.UnixMilli(),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cost != tt.wantCost {
+				t.Fatalf("cost = %f, want %f", cost, tt.wantCost)
+			}
+			if trace.MatchedTier != tt.wantTier {
+				t.Fatalf("tier = %q, want %q", trace.MatchedTier, tt.wantTier)
+			}
+		})
+	}
+}
+
+func TestTieredSettlementKeepsPreConsumeTimeAcrossBoundary(t *testing.T) {
+	exprStr := `(hour("Asia/Shanghai") * 60 + minute("Asia/Shanghai")) >= 600 && (hour("Asia/Shanghai") * 60 + minute("Asia/Shanghai")) < 720 ? tier("10:00-12:00", p * 1) : tier("default", p * 3)`
+	beijing := time.FixedZone("Asia/Shanghai", 8*60*60)
+	requestStart := time.Date(2026, time.August, 15, 11, 59, 0, 0, beijing)
+	responseEnd := time.Date(2026, time.August, 15, 12, 1, 0, 0, beijing)
+	snap := &billingexpr.BillingSnapshot{
+		BillingMode:          "tiered_expr",
+		ExprString:           exprStr,
+		ExprHash:             billingexpr.ExprHashString(exprStr),
+		GroupRatio:           1,
+		EstimatedTier:        "10:00-12:00",
+		BillingTimeUnixMilli: requestStart.UnixMilli(),
+		QuotaPerUnit:         500_000,
+		ExprVersion:          1,
+	}
+
+	result, err := billingexpr.ComputeTieredQuotaWithRequest(snap, billingexpr.TokenParams{P: 100}, billingexpr.RequestInput{
+		EvaluationTimeUnixMilli: responseEnd.UnixMilli(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.MatchedTier != "10:00-12:00" {
+		t.Fatalf("tier = %q, want frozen request tier", result.MatchedTier)
+	}
+	if result.ActualQuotaAfterGroup != 50 {
+		t.Fatalf("quota = %d, want 50", result.ActualQuotaAfterGroup)
+	}
+	if result.CrossedTier {
+		t.Fatal("time boundary must not change the settlement tier")
+	}
+}
+
+func TestTimePricingCrossMidnight(t *testing.T) {
+	exprStr := `(hour("Asia/Shanghai") * 60 + minute("Asia/Shanghai")) >= 1320 || (hour("Asia/Shanghai") * 60 + minute("Asia/Shanghai")) < 120 ? tier("night", p * 1) : tier("default", p * 3)`
+	beijing := time.FixedZone("Asia/Shanghai", 8*60*60)
+	tests := []struct {
+		hour     int
+		minute   int
+		wantTier string
+	}{
+		{hour: 21, minute: 59, wantTier: "default"},
+		{hour: 22, minute: 0, wantTier: "night"},
+		{hour: 23, minute: 59, wantTier: "night"},
+		{hour: 0, minute: 0, wantTier: "night"},
+		{hour: 1, minute: 59, wantTier: "night"},
+		{hour: 2, minute: 0, wantTier: "default"},
+	}
+	for _, tt := range tests {
+		at := time.Date(2026, time.August, 15, tt.hour, tt.minute, 0, 0, beijing)
+		_, trace, err := billingexpr.RunExprWithRequest(exprStr, billingexpr.TokenParams{P: 100}, billingexpr.RequestInput{
+			EvaluationTimeUnixMilli: at.UnixMilli(),
+		})
+		require.NoError(t, err)
+		require.Equal(t, tt.wantTier, trace.MatchedTier)
+	}
+}
+
+func TestTimePricingConcurrentEvaluationIsolation(t *testing.T) {
+	exprStr := `hour("Asia/Shanghai") < 12 ? tier("morning", p * 1) : tier("afternoon", p * 2)`
+	beijing := time.FixedZone("Asia/Shanghai", 8*60*60)
+	var wg sync.WaitGroup
+	errors := make(chan string, 1000)
+	for i := 0; i < 1000; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			hour := 9
+			wantCost := float64(100)
+			wantTier := "morning"
+			if index%2 == 1 {
+				hour = 15
+				wantCost = 200
+				wantTier = "afternoon"
+			}
+			at := time.Date(2026, time.August, 15, hour, 0, 0, 0, beijing)
+			cost, trace, err := billingexpr.RunExprWithRequest(exprStr, billingexpr.TokenParams{P: 100}, billingexpr.RequestInput{
+				EvaluationTimeUnixMilli: at.UnixMilli(),
+			})
+			if err != nil || cost != wantCost || trace.MatchedTier != wantTier {
+				errors <- fmt.Sprintf("index=%d cost=%g tier=%s err=%v", index, cost, trace.MatchedTier, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errors)
+	for errText := range errors {
+		t.Fatal(errText)
 	}
 }
 

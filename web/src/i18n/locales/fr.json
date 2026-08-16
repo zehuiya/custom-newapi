@@ -3743,6 +3743,21 @@
     "支持 /v1/responses": "Prendre en charge /v1/responses",
     "关闭后，/v1/responses 请求不会调度到此渠道；未配置时默认支持": "Si cette option est désactivée, les requêtes /v1/responses ne seront pas acheminées vers ce canal. Les canaux existants sont pris en charge par défaut.",
     "/v1/responses 请求不会调度到该渠道；其他接口不受影响。": "Les requêtes /v1/responses ne seront pas acheminées vers ce canal ; les autres interfaces ne sont pas affectées.",
-    "不支持 Responses": "Responses désactivé"
+    "不支持 Responses": "Responses désactivé",
+    "计费时间：{{time}}（北京时间）": "Heure de facturation : {{time}} (heure de Pékin)",
+    "时间段 {{n}}": "Plage horaire {{n}}",
+    "北京时间范围": "Plage horaire de Pékin",
+    "所有时间固定使用北京时间，区间包含开始时间、不包含结束时间；支持跨午夜。未命中时使用默认价格。": "Toutes les heures utilisent l'heure de Pékin. Le début est inclus et la fin exclue ; les plages passant minuit sont prises en charge. Le tarif par défaut s'applique hors plage.",
+    "添加时间段": "Ajouter une plage horaire",
+    "其他时间默认价格": "Tarif par défaut hors plage",
+    "阶梯维度": "Dimension des paliers",
+    "按输入长度": "Par longueur d'entrée",
+    "按北京时间段": "Par plage horaire de Pékin",
+    "估算时间（北京时间）": "Heure d'estimation (heure de Pékin)",
+    "模型 {{name}} 的计费配置无效：{{error}}": "Configuration de facturation invalide pour le modèle {{name}} : {{error}}",
+    "请至少添加一个时间段": "Ajoutez au moins une plage horaire",
+    "第 {{n}} 个时间段格式不正确": "Le format de la plage horaire {{n}} est invalide",
+    "第 {{n}} 个时间段的开始和结束时间不能相同": "Les heures de début et de fin de la plage {{n}} doivent être différentes",
+    "第 {{left}} 个和第 {{right}} 个时间段存在重叠": "Les plages horaires {{left}} et {{right}} se chevauchent"
   }
 }

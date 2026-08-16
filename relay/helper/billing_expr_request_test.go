@@ -6,9 +6,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
@@ -29,12 +31,29 @@ func TestResolveIncomingBillingExprRequestInput(t *testing.T) {
 
 	info := &relaycommon.RelayInfo{
 		RequestHeaders: map[string]string{"Content-Type": "application/json"},
+		StartTime:      time.UnixMilli(1_723_680_000_123),
 	}
 
 	input, err := ResolveIncomingBillingExprRequestInput(ctx, info)
 	require.NoError(t, err)
 	require.Equal(t, body, input.Body)
 	require.Equal(t, "application/json", input.Headers["Content-Type"])
+	require.Equal(t, info.StartTime.UnixMilli(), input.EvaluationTimeUnixMilli)
+}
+
+func TestResolveIncomingBillingExprRequestInputKeepsPreloadedEvaluationTime(t *testing.T) {
+	preloadedTime := int64(1_723_680_000_123)
+	info := &relaycommon.RelayInfo{
+		StartTime: time.UnixMilli(preloadedTime + 10_000),
+		BillingRequestInput: &billingexpr.RequestInput{
+			Body:                    []byte(`{"stream":true}`),
+			EvaluationTimeUnixMilli: preloadedTime,
+		},
+	}
+
+	input, err := ResolveIncomingBillingExprRequestInput(nil, info)
+	require.NoError(t, err)
+	require.Equal(t, preloadedTime, input.EvaluationTimeUnixMilli)
 }
 
 func TestBuildBillingExprRequestInputFromRequest(t *testing.T) {

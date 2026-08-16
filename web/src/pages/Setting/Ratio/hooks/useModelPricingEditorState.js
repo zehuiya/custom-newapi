@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { API, showError, showSuccess } from '../../../../helpers';
 import {
   combineBillingExpr,
@@ -41,6 +41,7 @@ const EMPTY_MODEL = {
   audioInputPrice: '',
   audioOutputPrice: '',
   billingExpr: '',
+  billingValidationError: '',
   requestRuleExpr: '',
   rawRatios: {
     modelRatio: '',
@@ -891,6 +892,27 @@ export function useModelPricingEditorState({
     }));
   };
 
+  const handleBillingValidationChange = useCallback(
+    (newError) => {
+      if (!selectedModelName) return;
+      setModels((previous) => {
+        let changed = false;
+        const next = previous.map((model) => {
+          if (
+            model.name !== selectedModelName ||
+            model.billingValidationError === newError
+          ) {
+            return model;
+          }
+          changed = true;
+          return { ...model, billingValidationError: newError };
+        });
+        return changed ? next : previous;
+      });
+    },
+    [selectedModelName],
+  );
+
   const handleRequestRuleExprChange = (newExpr) => {
     if (!selectedModel) return;
     upsertModel(selectedModel.name, (model) => ({
@@ -972,6 +994,7 @@ export function useModelPricingEditorState({
           audioInputPrice: selectedModel.audioInputPrice,
           audioOutputPrice: selectedModel.audioOutputPrice,
           billingExpr: selectedModel.billingExpr || '',
+          billingValidationError: selectedModel.billingValidationError || '',
           requestRuleExpr: selectedModel.requestRuleExpr || '',
         };
 
@@ -1021,6 +1044,19 @@ export function useModelPricingEditorState({
   };
 
   const handleSubmit = async () => {
+    const invalidModel = models.find(
+      (model) =>
+        model.billingMode === 'tiered_expr' && model.billingValidationError,
+    );
+    if (invalidModel) {
+      showError(
+        t('模型 {{name}} 的计费配置无效：{{error}}', {
+          name: invalidModel.name,
+          error: invalidModel.billingValidationError,
+        }),
+      );
+      return;
+    }
     setLoading(true);
     try {
       const output = {
@@ -1117,6 +1153,7 @@ export function useModelPricingEditorState({
     handleNumericFieldChange,
     handleBillingModeChange,
     handleBillingExprChange,
+    handleBillingValidationChange,
     handleRequestRuleExprChange,
     handleSubmit,
     addModel,

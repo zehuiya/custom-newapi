@@ -2289,6 +2289,7 @@ export function renderTieredModelPrice(opts) {
     completion_tokens: completionTokens = 0,
     expr_b64: exprB64,
     matched_tier: matchedTier,
+    billing_time: billingTime,
     group_ratio: groupRatio,
     cache_tokens: cacheTokens = 0,
     cache_creation_tokens: cacheCreationTokens = 0,
@@ -2314,6 +2315,13 @@ export function renderTieredModelPrice(opts) {
 
   const lines = [
     buildBillingText('命中档位：{{tier}}', { tier: matchedTier || tier.label }),
+    ...(billingTime
+      ? [
+          buildBillingText('计费时间：{{time}}（北京时间）', {
+            time: billingTime,
+          }),
+        ]
+      : []),
     ...priceLines
       .filter(([field]) => tier[field] > 0)
       .map(([field, label]) =>

@@ -125,6 +125,7 @@ export default function ModelPricingEditor({
     handleNumericFieldChange,
     handleBillingModeChange,
     handleBillingExprChange,
+    handleBillingValidationChange,
     handleRequestRuleExprChange,
     handleSubmit,
     addModel,
@@ -451,8 +452,10 @@ export default function ModelPricingEditor({
                   />
                 ) : selectedModel.billingMode === 'tiered_expr' ? (
                   <TieredPricingEditor
+                    key={selectedModel.name}
                     model={selectedModel}
                     onExprChange={handleBillingExprChange}
+                    onValidationChange={handleBillingValidationChange}
                     requestRuleExpr={selectedModel.requestRuleExpr}
                     onRequestRuleExprChange={handleRequestRuleExprChange}
                     t={t}

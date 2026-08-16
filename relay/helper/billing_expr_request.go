@@ -13,6 +13,7 @@ import (
 func ResolveIncomingBillingExprRequestInput(c *gin.Context, info *relaycommon.RelayInfo) (billingexpr.RequestInput, error) {
 	if info != nil && info.BillingRequestInput != nil {
 		input := cloneRequestInput(*info.BillingRequestInput)
+		setBillingEvaluationTime(&input, info)
 		if len(input.Headers) == 0 {
 			input.Headers = cloneStringMap(info.RequestHeaders)
 		}
@@ -22,6 +23,7 @@ func ResolveIncomingBillingExprRequestInput(c *gin.Context, info *relaycommon.Re
 	input := billingexpr.RequestInput{}
 	if info != nil {
 		input.Headers = cloneStringMap(info.RequestHeaders)
+		setBillingEvaluationTime(&input, info)
 	}
 
 	bodyBytes, err := readIncomingBillingExprBody(c)
@@ -61,12 +63,20 @@ func readIncomingBillingExprBody(c *gin.Context) ([]byte, error) {
 
 func cloneRequestInput(src billingexpr.RequestInput) billingexpr.RequestInput {
 	input := billingexpr.RequestInput{
-		Headers: cloneStringMap(src.Headers),
+		Headers:                 cloneStringMap(src.Headers),
+		EvaluationTimeUnixMilli: src.EvaluationTimeUnixMilli,
 	}
 	if len(src.Body) > 0 {
 		input.Body = append([]byte(nil), src.Body...)
 	}
 	return input
+}
+
+func setBillingEvaluationTime(input *billingexpr.RequestInput, info *relaycommon.RelayInfo) {
+	if input == nil || info == nil || input.EvaluationTimeUnixMilli > 0 || info.StartTime.IsZero() {
+		return
+	}
+	input.EvaluationTimeUnixMilli = info.StartTime.UnixMilli()
 }
 
 func isJSONContentType(contentType string) bool {
