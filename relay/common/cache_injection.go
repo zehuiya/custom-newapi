@@ -54,3 +54,21 @@ func (info *RelayInfo) CalculateSyntheticCacheTokens(totalPromptTokens int) int 
 	}
 	return syntheticCacheTokensAtPercentage(totalPromptTokens, *info.syntheticCachePercent)
 }
+
+// CalculateSyntheticCacheTarget returns the larger of the upstream cache and
+// the configured synthetic target. Existing cache is only eligible for an
+// increase when cache_override_enabled is set; this preserves legacy behavior.
+func (info *RelayInfo) CalculateSyntheticCacheTarget(totalInputTokens int, upstreamCachedTokens int) (int, bool) {
+	if info == nil || totalInputTokens <= 0 || upstreamCachedTokens < 0 {
+		return upstreamCachedTokens, false
+	}
+	if upstreamCachedTokens > 0 && !info.ChannelSetting.CacheOverrideEnabled {
+		return upstreamCachedTokens, false
+	}
+
+	targetCachedTokens := info.CalculateSyntheticCacheTokens(totalInputTokens)
+	if targetCachedTokens <= upstreamCachedTokens {
+		return upstreamCachedTokens, false
+	}
+	return targetCachedTokens, true
+}

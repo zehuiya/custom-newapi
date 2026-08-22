@@ -731,6 +731,28 @@ func syncClaudeUsageFieldsFromRelayUsage(claudeUsage *dto.ClaudeUsage, relayUsag
 	}
 }
 
+func injectSyntheticCacheInfoForClaudeUsage(usage *dto.Usage, info *relaycommon.RelayInfo) bool {
+	if usage == nil || info == nil {
+		return false
+	}
+
+	existingCachedTokens := usage.PromptTokensDetails.CachedTokens
+	totalInputTokens := usage.PromptTokens + existingCachedTokens
+	cachedTokens, changed := info.CalculateSyntheticCacheTarget(totalInputTokens, existingCachedTokens)
+	if !changed {
+		return false
+	}
+
+	usage.PromptTokens = totalInputTokens - cachedTokens
+	usage.InputTokens = usage.PromptTokens
+	usage.PromptTokensDetails.CachedTokens = cachedTokens
+	if usage.InputTokensDetails != nil {
+		usage.InputTokensDetails.CachedTokens = cachedTokens
+	}
+	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	return true
+}
+
 func buildMessageDeltaPatchUsage(claudeResponse *dto.ClaudeResponse, claudeInfo *ClaudeResponseInfo) *dto.ClaudeUsage {
 	usage := &dto.ClaudeUsage{}
 	if claudeResponse != nil && claudeResponse.Usage != nil {
@@ -982,20 +1004,9 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 					data = rewriteClaudeUsageData(data, claudeResponse.Usage)
 				}
 			}
-			// 根据渠道配置向 message_delta 注入缓存信息；已有上游缓存数据时不会覆盖。
-			if info.ShouldInjectCacheInfo && claudeResponse.Usage != nil && claudeResponse.Usage.CacheReadInputTokens == 0 && claudeInfo.Usage != nil && claudeInfo.Usage.PromptTokens > 0 {
-				originalInputTokens := claudeInfo.Usage.PromptTokens
-				cachedTokens := info.CalculateSyntheticCacheTokens(originalInputTokens)
-				uncachedTokens := originalInputTokens - cachedTokens
-
-				claudeResponse.Usage.InputTokens = uncachedTokens
-				claudeResponse.Usage.CacheReadInputTokens = cachedTokens
-
-				// 同步更新 claudeInfo.Usage，防止 HandleStreamFinalResponse 重复注入
-				claudeInfo.Usage.PromptTokens = uncachedTokens
-				claudeInfo.Usage.PromptTokensDetails.CachedTokens = cachedTokens
-				claudeInfo.Usage.TotalTokens = uncachedTokens + claudeInfo.Usage.CompletionTokens
-
+			// 默认仅在上游无缓存时注入；开启补足开关后只提高较低的上游缓存。
+			if info.ShouldInjectCacheInfo && claudeResponse.Usage != nil && injectSyntheticCacheInfoForClaudeUsage(claudeInfo.Usage, info) {
+				syncClaudeUsageFieldsFromRelayUsage(claudeResponse.Usage, claudeInfo.Usage)
 				data = rewriteClaudeUsageData(data, claudeResponse.Usage)
 			}
 			if service.NormalizeNoCacheUsageForRelay(c, info, claudeInfo.Usage) && claudeResponse.Usage != nil {
@@ -1053,17 +1064,9 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 	}
 	normalizeAnthropicInclusiveCacheUsage(info, claudeInfo.Usage)
 
-	// 根据渠道配置注入缓存信息；已有上游缓存数据时不会覆盖。
-	if info.ShouldInjectCacheInfo && claudeInfo.Usage.PromptTokensDetails.CachedTokens == 0 && claudeInfo.Usage.PromptTokens >= 4096 {
-		// 从渠道配置的百分比范围内随机抽取 prompt token 作为缓存 token。
-		originalPromptTokens := claudeInfo.Usage.PromptTokens
-		cachedTokens := info.CalculateSyntheticCacheTokens(originalPromptTokens)
-		uncachedTokens := originalPromptTokens - cachedTokens
-
-		// 更新Usage：PromptTokens变成未缓存部分，CachedTokens是缓存部分
-		claudeInfo.Usage.PromptTokens = uncachedTokens
-		claudeInfo.Usage.PromptTokensDetails.CachedTokens = cachedTokens
-		claudeInfo.Usage.TotalTokens = uncachedTokens + claudeInfo.Usage.CompletionTokens
+	// 默认仅在上游无缓存时注入；开启补足开关后只提高较低的上游缓存。
+	if info.ShouldInjectCacheInfo && claudeInfo.Usage.PromptTokens+claudeInfo.Usage.PromptTokensDetails.CachedTokens >= 4096 {
+		injectSyntheticCacheInfoForClaudeUsage(claudeInfo.Usage, info)
 	}
 	service.NormalizeNoCacheUsageForRelay(c, info, claudeInfo.Usage)
 	service.FillMissingReasoningTokens(c, claudeInfo.Usage, claudeInfo.ReasoningText.String(), claudeInfo.OutputText.String(), info.UpstreamModelName)
@@ -1137,21 +1140,9 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 			syncClaudeUsageFieldsFromRelayUsage(claudeResponse.Usage, claudeInfo.Usage)
 		}
 
-		// 根据渠道配置注入缓存信息；已有上游缓存数据时不会覆盖。
-		if info.ShouldInjectCacheInfo && claudeResponse.Usage.CacheReadInputTokens == 0 {
-			// 从渠道配置的百分比范围内随机抽取 input token 作为缓存读取 token。
-			originalInputTokens := claudeResponse.Usage.InputTokens
-			cachedTokens := info.CalculateSyntheticCacheTokens(originalInputTokens)
-			uncachedTokens := originalInputTokens - cachedTokens
-
-			// 更新响应数据
-			claudeResponse.Usage.CacheReadInputTokens = cachedTokens
-			claudeResponse.Usage.InputTokens = uncachedTokens
-
-			// 更新Usage：PromptTokens是未缓存的部分，CachedTokens是缓存的部分
-			claudeInfo.Usage.PromptTokens = uncachedTokens
-			claudeInfo.Usage.PromptTokensDetails.CachedTokens = cachedTokens
-			claudeInfo.Usage.TotalTokens = uncachedTokens + claudeResponse.Usage.OutputTokens
+		// 默认仅在上游无缓存时注入；开启补足开关后只提高较低的上游缓存。
+		if info.ShouldInjectCacheInfo && injectSyntheticCacheInfoForClaudeUsage(claudeInfo.Usage, info) {
+			syncClaudeUsageFieldsFromRelayUsage(claudeResponse.Usage, claudeInfo.Usage)
 		}
 		noCacheNormalized = service.NormalizeNoCacheUsageForRelay(c, info, claudeInfo.Usage)
 		if noCacheNormalized {

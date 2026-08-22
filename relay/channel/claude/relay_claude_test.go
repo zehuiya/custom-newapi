@@ -57,6 +57,147 @@ func TestFormatClaudeResponseInfo_MessageStart(t *testing.T) {
 	}
 }
 
+func TestSyntheticCacheInjectionOverrideRaisesLowerClaudeCache(t *testing.T) {
+	percentage := 85
+	usage := &dto.Usage{
+		PromptTokens:     9500,
+		CompletionTokens: 100,
+		TotalTokens:      9600,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens: 500,
+		},
+	}
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelSetting: dto.ChannelSettings{
+		CacheEnabled:         true,
+		CacheOverrideEnabled: true,
+		CachePercentageMin:   &percentage,
+		CachePercentageMax:   &percentage,
+	}}}
+
+	changed := injectSyntheticCacheInfoForClaudeUsage(usage, info)
+
+	require.True(t, changed)
+	require.Equal(t, 1500, usage.PromptTokens)
+	require.Equal(t, 1500, usage.InputTokens)
+	require.Equal(t, 8500, usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 1600, usage.TotalTokens)
+}
+
+func TestSyntheticCacheInjectionOverridePreservesHigherClaudeCache(t *testing.T) {
+	percentage := 85
+	usage := &dto.Usage{
+		PromptTokens: 1000,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens: 9000,
+		},
+	}
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelSetting: dto.ChannelSettings{
+		CacheEnabled:         true,
+		CacheOverrideEnabled: true,
+		CachePercentageMin:   &percentage,
+		CachePercentageMax:   &percentage,
+	}}}
+
+	changed := injectSyntheticCacheInfoForClaudeUsage(usage, info)
+
+	require.False(t, changed)
+	require.Equal(t, 1000, usage.PromptTokens)
+	require.Equal(t, 9000, usage.PromptTokensDetails.CachedTokens)
+}
+
+func TestSyntheticCacheInjectionLegacyModePreservesClaudeCache(t *testing.T) {
+	percentage := 85
+	usage := &dto.Usage{
+		PromptTokens: 9500,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens: 500,
+		},
+	}
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelSetting: dto.ChannelSettings{
+		CacheEnabled:       true,
+		CachePercentageMin: &percentage,
+		CachePercentageMax: &percentage,
+	}}}
+
+	changed := injectSyntheticCacheInfoForClaudeUsage(usage, info)
+
+	require.False(t, changed)
+	require.Equal(t, 9500, usage.PromptTokens)
+	require.Equal(t, 500, usage.PromptTokensDetails.CachedTokens)
+}
+
+func TestHandleClaudeResponseDataSyntheticCacheOverrideRewritesLowerUpstreamCache(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	percentage := 85
+	info := &relaycommon.RelayInfo{
+		RelayFormat:           types.RelayFormatClaude,
+		ShouldInjectCacheInfo: true,
+		ChannelMeta: &relaycommon.ChannelMeta{ChannelSetting: dto.ChannelSettings{
+			CacheEnabled:         true,
+			CacheOverrideEnabled: true,
+			CachePercentageMin:   &percentage,
+			CachePercentageMax:   &percentage,
+		}},
+	}
+	claudeInfo := &ClaudeResponseInfo{Usage: &dto.Usage{}}
+	data := []byte(`{
+		"id":"msg-cache-override",
+		"type":"message",
+		"role":"assistant",
+		"model":"claude-test",
+		"content":[{"type":"text","text":"ok"}],
+		"stop_reason":"end_turn",
+		"usage":{"input_tokens":9500,"cache_read_input_tokens":500,"output_tokens":100}
+	}`)
+
+	err := HandleClaudeResponseData(c, info, claudeInfo, &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+	}, data)
+
+	require.Nil(t, err)
+	require.Equal(t, 1500, claudeInfo.Usage.PromptTokens)
+	require.Equal(t, 8500, claudeInfo.Usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 1600, claudeInfo.Usage.TotalTokens)
+	var body dto.ClaudeResponse
+	require.NoError(t, common.Unmarshal(w.Body.Bytes(), &body))
+	require.NotNil(t, body.Usage)
+	require.Equal(t, 1500, body.Usage.InputTokens)
+	require.Equal(t, 8500, body.Usage.CacheReadInputTokens)
+	require.Equal(t, 100, body.Usage.OutputTokens)
+}
+
+func TestHandleStreamResponseDataSyntheticCacheOverrideRewritesLowerUpstreamCache(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	percentage := 85
+	info := &relaycommon.RelayInfo{
+		RelayFormat:           types.RelayFormatClaude,
+		ShouldInjectCacheInfo: true,
+		ChannelMeta: &relaycommon.ChannelMeta{ChannelSetting: dto.ChannelSettings{
+			CacheEnabled:         true,
+			CacheOverrideEnabled: true,
+			CachePercentageMin:   &percentage,
+			CachePercentageMax:   &percentage,
+		}},
+	}
+	claudeInfo := &ClaudeResponseInfo{Usage: &dto.Usage{}}
+	data := `{"type":"message_delta","usage":{"input_tokens":9500,"cache_read_input_tokens":500,"output_tokens":100},"delta":{"stop_reason":"end_turn"}}`
+
+	err := HandleStreamResponseData(c, info, claudeInfo, data)
+
+	require.Nil(t, err)
+	require.Equal(t, 1500, claudeInfo.Usage.PromptTokens)
+	require.Equal(t, 8500, claudeInfo.Usage.PromptTokensDetails.CachedTokens)
+	require.Contains(t, w.Body.String(), `"input_tokens":1500`)
+	require.Contains(t, w.Body.String(), `"cache_read_input_tokens":8500`)
+}
+
 func TestFormatClaudeResponseInfo_MessageDelta_FullUsage(t *testing.T) {
 	// message_start 先积累 usage
 	claudeInfo := &ClaudeResponseInfo{

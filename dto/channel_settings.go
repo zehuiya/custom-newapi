@@ -8,6 +8,7 @@ type ChannelSettings struct {
 	SystemPrompt             string `json:"system_prompt,omitempty"`
 	SystemPromptOverride     bool   `json:"system_prompt_override,omitempty"`
 	CacheEnabled             bool   `json:"cache_enabled,omitempty"`
+	CacheOverrideEnabled     bool   `json:"cache_override_enabled,omitempty"`
 	CachePercentageMin       *int   `json:"cache_percentage_min,omitempty"`
 	CachePercentageMax       *int   `json:"cache_percentage_max,omitempty"`
 	NoCacheEnabled           bool   `json:"no_cache_enabled,omitempty"`

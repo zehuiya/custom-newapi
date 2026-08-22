@@ -23,10 +23,24 @@ import (
 )
 
 func injectSyntheticCacheInfoForOpenAIUsage(usage *dto.Usage, info *relaycommon.RelayInfo) bool {
-	if usage == nil || info == nil || usage.PromptTokens <= 0 || usage.PromptTokensDetails.CachedTokens != 0 {
+	if usage == nil || info == nil || usage.PromptTokens <= 0 {
 		return false
 	}
-	usage.PromptTokensDetails.CachedTokens = info.CalculateSyntheticCacheTokens(usage.PromptTokens)
+	cachedTokens, changed := info.CalculateSyntheticCacheTarget(
+		usage.PromptTokens,
+		usage.PromptTokensDetails.CachedTokens,
+	)
+	if !changed {
+		return false
+	}
+
+	usage.PromptTokensDetails.CachedTokens = cachedTokens
+	if usage.InputTokensDetails != nil {
+		usage.InputTokensDetails.CachedTokens = cachedTokens
+	}
+	if usage.PromptCacheHitTokens > 0 {
+		usage.PromptCacheHitTokens = cachedTokens
+	}
 	return true
 }
 
@@ -147,13 +161,12 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		cacheTokensBeforePostProcessing := usage.PromptTokensDetails.CachedTokens
 		applyUsagePostProcessing(info, usage, common.StringToByteSlice(lastStreamData))
 		usageModifiedInLastStream := info.ShouldInjectCacheInfo &&
-			cacheTokensBeforePostProcessing == 0 &&
-			usage.PromptTokensDetails.CachedTokens > 0
+			cacheTokensBeforePostProcessing != usage.PromptTokensDetails.CachedTokens
 		if service.FillMissingReasoningTokens(c, usage, reasoningText, outputText, model) {
 			usageModifiedInLastStream = true
 		}
-		if info.ShouldInjectCacheInfo && usage.PromptTokensDetails.CachedTokens == 0 && usage.PromptTokens >= 4096 {
-			usageModifiedInLastStream = injectSyntheticCacheInfoForOpenAIUsage(usage, info)
+		if info.ShouldInjectCacheInfo && usage.PromptTokens >= 4096 && injectSyntheticCacheInfoForOpenAIUsage(usage, info) {
+			usageModifiedInLastStream = true
 		}
 		if service.NormalizeNoCacheUsageForRelay(c, info, usage) {
 			usageModifiedInLastStream = true
@@ -266,14 +279,13 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 	cacheTokensBeforePostProcessing := simpleResponse.Usage.PromptTokensDetails.CachedTokens
 	applyUsagePostProcessing(info, &simpleResponse.Usage, responseBody)
 	if info.ShouldInjectCacheInfo &&
-		cacheTokensBeforePostProcessing == 0 &&
-		simpleResponse.Usage.PromptTokensDetails.CachedTokens > 0 {
+		cacheTokensBeforePostProcessing != simpleResponse.Usage.PromptTokensDetails.CachedTokens {
 		usageModified = true
 	}
 
-	// 根据渠道配置注入缓存信息；已有上游缓存数据时不会覆盖。
-	if info.ShouldInjectCacheInfo && simpleResponse.Usage.PromptTokensDetails.CachedTokens == 0 {
-		usageModified = injectSyntheticCacheInfoForOpenAIUsage(&simpleResponse.Usage, info)
+	// 默认仅在上游无缓存时注入；开启补足开关后只提高较低的上游缓存。
+	if info.ShouldInjectCacheInfo && injectSyntheticCacheInfoForOpenAIUsage(&simpleResponse.Usage, info) {
+		usageModified = true
 	}
 
 	if service.NormalizeNoCacheUsageForRelay(c, info, &simpleResponse.Usage) {

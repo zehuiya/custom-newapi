@@ -68,6 +68,10 @@ func TestValidateSettingsAcceptsCacheConfiguration(t *testing.T) {
 			rawSetting: `{"cache_enabled":true,"cache_percentage_min":25,"cache_percentage_max":75}`,
 		},
 		{
+			name:       "cache enabled with existing cache override",
+			rawSetting: `{"cache_enabled":true,"cache_override_enabled":true,"cache_percentage_min":85,"cache_percentage_max":85}`,
+		},
+		{
 			name:       "cache enabled with one hundred percent range",
 			rawSetting: `{"cache_enabled":true,"cache_percentage_min":100,"cache_percentage_max":100}`,
 		},
@@ -188,6 +192,15 @@ func TestGetSettingPreservesExplicitZeroCacheRange(t *testing.T) {
 	require.NotNil(t, setting.CachePercentageMax)
 	require.Zero(t, *setting.CachePercentageMin)
 	require.Zero(t, *setting.CachePercentageMax)
+}
+
+func TestGetSettingCacheOverrideDefaultsToDisabled(t *testing.T) {
+	legacySetting := (&Channel{}).GetSetting()
+	require.False(t, legacySetting.CacheOverrideEnabled)
+
+	rawSetting := `{"cache_enabled":true,"cache_override_enabled":true}`
+	setting := (&Channel{Setting: &rawSetting}).GetSetting()
+	require.True(t, setting.CacheOverrideEnabled)
 }
 
 func TestGetSettingCacheReductionPercentageDefaultsAndPreservesZero(t *testing.T) {

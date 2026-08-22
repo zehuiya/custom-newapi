@@ -120,6 +120,54 @@ func TestSyntheticCacheInjectionDoesNotOverwriteUpstreamCacheTokens(t *testing.T
 	require.Equal(t, 1234, usage.PromptTokensDetails.CachedTokens)
 }
 
+func TestSyntheticCacheInjectionOverrideRaisesLowerOpenAICache(t *testing.T) {
+	percentage := 85
+	usage := &dto.Usage{
+		PromptTokens:         10000,
+		CompletionTokens:     100,
+		TotalTokens:          10100,
+		PromptCacheHitTokens: 500,
+		PromptTokensDetails:  dto.InputTokenDetails{CachedTokens: 500},
+		InputTokensDetails:   &dto.InputTokenDetails{CachedTokens: 500},
+	}
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelSetting: dto.ChannelSettings{
+		CacheEnabled:         true,
+		CacheOverrideEnabled: true,
+		CachePercentageMin:   &percentage,
+		CachePercentageMax:   &percentage,
+	}}}
+
+	changed := injectSyntheticCacheInfoForOpenAIUsage(usage, info)
+
+	require.True(t, changed)
+	require.Equal(t, 10000, usage.PromptTokens)
+	require.Equal(t, 10100, usage.TotalTokens)
+	require.Equal(t, 8500, usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 8500, usage.InputTokensDetails.CachedTokens)
+	require.Equal(t, 8500, usage.PromptCacheHitTokens)
+}
+
+func TestSyntheticCacheInjectionOverridePreservesHigherOpenAICache(t *testing.T) {
+	percentage := 85
+	usage := &dto.Usage{
+		PromptTokens: 10000,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens: 9000,
+		},
+	}
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelSetting: dto.ChannelSettings{
+		CacheEnabled:         true,
+		CacheOverrideEnabled: true,
+		CachePercentageMin:   &percentage,
+		CachePercentageMax:   &percentage,
+	}}}
+
+	changed := injectSyntheticCacheInfoForOpenAIUsage(usage, info)
+
+	require.False(t, changed)
+	require.Equal(t, 9000, usage.PromptTokensDetails.CachedTokens)
+}
+
 func TestOpenaiHandlerSyntheticCacheDoesNotReplaceProviderSpecificCache(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
@@ -159,6 +207,42 @@ func TestOpenaiHandlerSyntheticCacheDoesNotReplaceProviderSpecificCache(t *testi
 	var body dto.OpenAITextResponse
 	require.NoError(t, common.Unmarshal(w.Body.Bytes(), &body))
 	require.Equal(t, 2000, body.Usage.PromptTokensDetails.CachedTokens)
+}
+
+func TestOpenaiHandlerSyntheticCacheOverrideRewritesLowerUpstreamCache(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body: io.NopCloser(strings.NewReader(`{
+			"id":"chatcmpl-cache-override",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],
+			"usage":{"prompt_tokens":10000,"completion_tokens":100,"total_tokens":10100,"prompt_tokens_details":{"cached_tokens":500}}
+		}`)),
+	}
+	percentage := 85
+	info := &relaycommon.RelayInfo{
+		RelayFormat:           types.RelayFormatOpenAI,
+		ShouldInjectCacheInfo: true,
+		ChannelMeta: &relaycommon.ChannelMeta{ChannelSetting: dto.ChannelSettings{
+			CacheEnabled:         true,
+			CacheOverrideEnabled: true,
+			CachePercentageMin:   &percentage,
+			CachePercentageMax:   &percentage,
+		}},
+	}
+
+	usage, err := OpenaiHandler(c, info, resp)
+
+	require.Nil(t, err)
+	require.Equal(t, 10000, usage.PromptTokens)
+	require.Equal(t, 8500, usage.PromptTokensDetails.CachedTokens)
+	var body dto.OpenAITextResponse
+	require.NoError(t, common.Unmarshal(w.Body.Bytes(), &body))
+	require.Equal(t, 10000, body.Usage.PromptTokens)
+	require.Equal(t, 8500, body.Usage.PromptTokensDetails.CachedTokens)
 }
 
 func TestOpenaiHandlerNoCacheMovesCacheReadIntoInputInResponse(t *testing.T) {

@@ -119,6 +119,39 @@ func TestRelayInfoRemembersZeroPercentSample(t *testing.T) {
 	require.Same(t, sampledPercentage, info.syntheticCachePercent)
 }
 
+func TestCalculateSyntheticCacheTarget(t *testing.T) {
+	percentage := 85
+	tests := []struct {
+		name            string
+		overrideEnabled bool
+		upstreamCached  int
+		wantCached      int
+		wantChanged     bool
+	}{
+		{name: "legacy mode injects when upstream cache is empty", upstreamCached: 0, wantCached: 8500, wantChanged: true},
+		{name: "legacy mode preserves existing upstream cache", upstreamCached: 500, wantCached: 500, wantChanged: false},
+		{name: "override raises lower upstream cache", overrideEnabled: true, upstreamCached: 500, wantCached: 8500, wantChanged: true},
+		{name: "override preserves higher upstream cache", overrideEnabled: true, upstreamCached: 9000, wantCached: 9000, wantChanged: false},
+		{name: "override preserves equal upstream cache", overrideEnabled: true, upstreamCached: 8500, wantCached: 8500, wantChanged: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			info := &RelayInfo{ChannelMeta: &ChannelMeta{ChannelSetting: dto.ChannelSettings{
+				CacheEnabled:         true,
+				CacheOverrideEnabled: tt.overrideEnabled,
+				CachePercentageMin:   &percentage,
+				CachePercentageMax:   &percentage,
+			}}}
+
+			cachedTokens, changed := info.CalculateSyntheticCacheTarget(10000, tt.upstreamCached)
+
+			require.Equal(t, tt.wantCached, cachedTokens)
+			require.Equal(t, tt.wantChanged, changed)
+		})
+	}
+}
+
 func TestInitChannelMetaResetsSyntheticCachePercentageForRetry(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	info := &RelayInfo{ChannelMeta: &ChannelMeta{ChannelSetting: dto.ChannelSettings{

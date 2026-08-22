@@ -304,6 +304,7 @@ const getCacheUsageMeta = (record) => {
       settings.cache_enabled === true &&
       !noCacheEnabled &&
       !cacheReductionEnabled,
+    cacheOverrideEnabled: settings.cache_override_enabled === true,
     noCacheEnabled,
     cacheReductionEnabled,
     cacheReductionPercentage: normalizePercentage(
@@ -441,16 +442,27 @@ export const getChannelsColumns = ({
             {nameNode}
             {cacheUsageMeta.cacheEnabled && (
               <Tooltip
-                content={t(
-                  '上游未返回缓存用量且预估输入不少于 4096 tokens 时，按下方范围随机补充缓存读取量。',
-                )}
+                content={
+                  cacheUsageMeta.cacheOverrideEnabled
+                    ? t(
+                        '预估输入不少于 4096 tokens 时，按配置比例补足缓存读取量；上游缓存更高时保持不变。',
+                      )
+                    : t(
+                        '上游未返回缓存用量且预估输入不少于 4096 tokens 时，按下方范围随机补充缓存读取量。',
+                      )
+                }
                 position='top'
               >
                 <Tag color='cyan' type='light' size='small' shape='circle'>
-                  {t('缓存 {{min}}%-{{max}}%', {
-                    min: cacheUsageMeta.percentageMin,
-                    max: cacheUsageMeta.percentageMax,
-                  })}
+                  {cacheUsageMeta.cacheOverrideEnabled
+                    ? t('缓存补足 {{min}}%-{{max}}%', {
+                        min: cacheUsageMeta.percentageMin,
+                        max: cacheUsageMeta.percentageMax,
+                      })
+                    : t('缓存 {{min}}%-{{max}}%', {
+                        min: cacheUsageMeta.percentageMin,
+                        max: cacheUsageMeta.percentageMax,
+                      })}
                 </Tag>
               </Tooltip>
             )}

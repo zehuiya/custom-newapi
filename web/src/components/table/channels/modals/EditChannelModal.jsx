@@ -207,6 +207,11 @@ const CHANNEL_CHANGE_FIELDS = [
     valueType: 'boolean',
   },
   {
+    key: 'cache_override_enabled',
+    label: '已有缓存也补足',
+    valueType: 'boolean',
+  },
+  {
     key: 'cache_percentage_min',
     label: '缓存比例下限',
     valueType: 'number',
@@ -529,6 +534,7 @@ const EditChannelModal = (props) => {
     system_prompt: '',
     system_prompt_override: false,
     cache_enabled: false,
+    cache_override_enabled: false,
     cache_percentage_min: DEFAULT_CACHE_PERCENTAGE_MIN,
     cache_percentage_max: DEFAULT_CACHE_PERCENTAGE_MAX,
     no_cache_enabled: false,
@@ -865,6 +871,12 @@ const EditChannelModal = (props) => {
 
   const handleCacheModeChange = (key, value) => {
     const updates = { [key]: value };
+    if (
+      (!value && key === 'cache_enabled') ||
+      (value && key !== 'cache_enabled')
+    ) {
+      updates.cache_override_enabled = false;
+    }
     if (value) {
       for (const modeKey of [
         'cache_enabled',
@@ -1214,6 +1226,8 @@ const EditChannelModal = (props) => {
           data.system_prompt_override =
             parsedSettings.system_prompt_override || false;
           data.cache_enabled = parsedSettings.cache_enabled === true;
+          data.cache_override_enabled =
+            parsedSettings.cache_override_enabled === true;
           const cachePercentageMin = Number(
             parsedSettings.cache_percentage_min ?? DEFAULT_CACHE_PERCENTAGE_MIN,
           );
@@ -1251,6 +1265,7 @@ const EditChannelModal = (props) => {
           data.system_prompt = '';
           data.system_prompt_override = false;
           data.cache_enabled = false;
+          data.cache_override_enabled = false;
           data.cache_percentage_min = DEFAULT_CACHE_PERCENTAGE_MIN;
           data.cache_percentage_max = DEFAULT_CACHE_PERCENTAGE_MAX;
           data.no_cache_enabled = false;
@@ -1267,6 +1282,7 @@ const EditChannelModal = (props) => {
         data.system_prompt = '';
         data.system_prompt_override = false;
         data.cache_enabled = false;
+        data.cache_override_enabled = false;
         data.cache_percentage_min = DEFAULT_CACHE_PERCENTAGE_MIN;
         data.cache_percentage_max = DEFAULT_CACHE_PERCENTAGE_MAX;
         data.no_cache_enabled = false;
@@ -1426,6 +1442,7 @@ const EditChannelModal = (props) => {
         data.force_format ||
         data.force_stream ||
         data.cache_enabled ||
+        data.cache_override_enabled ||
         data.no_cache_enabled ||
         data.cache_reduction_enabled ||
         data.claude_beta_query ||
@@ -1995,6 +2012,10 @@ const EditChannelModal = (props) => {
 
     localInputs.cache_enabled =
       (localInputs.cache_enabled ?? inputs.cache_enabled) === true;
+    localInputs.cache_override_enabled =
+      localInputs.cache_enabled &&
+      (localInputs.cache_override_enabled ?? inputs.cache_override_enabled) ===
+        true;
     localInputs.no_cache_enabled =
       (localInputs.no_cache_enabled ?? inputs.no_cache_enabled) === true;
     localInputs.cache_reduction_enabled =
@@ -2275,6 +2296,7 @@ const EditChannelModal = (props) => {
       system_prompt: localInputs.system_prompt || '',
       system_prompt_override: localInputs.system_prompt_override || false,
       cache_enabled: localInputs.cache_enabled === true,
+      cache_override_enabled: localInputs.cache_override_enabled === true,
       cache_percentage_min: localInputs.cache_percentage_min,
       cache_percentage_max: localInputs.cache_percentage_max,
       no_cache_enabled: localInputs.no_cache_enabled === true,
@@ -2378,6 +2400,7 @@ const EditChannelModal = (props) => {
     delete localInputs.system_prompt;
     delete localInputs.system_prompt_override;
     delete localInputs.cache_enabled;
+    delete localInputs.cache_override_enabled;
     delete localInputs.cache_percentage_min;
     delete localInputs.cache_percentage_max;
     delete localInputs.no_cache_enabled;
@@ -3247,6 +3270,23 @@ const EditChannelModal = (props) => {
                     }
                     extraText={t(
                       '上游未返回缓存用量且预估输入不少于 4096 tokens 时，按下方范围随机补充缓存读取量。',
+                    )}
+                  />
+
+                  <Form.Switch
+                    field='cache_override_enabled'
+                    label={t('已有缓存也补足')}
+                    checkedText={t('开')}
+                    uncheckedText={t('关')}
+                    disabled={!inputs.cache_enabled}
+                    onChange={(value) =>
+                      handleChannelSettingsChange(
+                        'cache_override_enabled',
+                        value,
+                      )
+                    }
+                    extraText={t(
+                      '开启后，上游已有缓存低于配置比例时也会补足；上游缓存更高时保持不变。',
                     )}
                   />
 
