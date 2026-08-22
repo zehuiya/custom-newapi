@@ -83,6 +83,24 @@ const PRICING_MODE_TOKEN = 'token';
 const PRICING_MODE_TIME = 'time';
 const BEIJING_TIME_EXPR =
   '(hour("Asia/Shanghai") * 60 + minute("Asia/Shanghai"))';
+const BEIJING_WEEKDAY_EXPR = 'weekday("Asia/Shanghai")';
+const DAY_SCOPE_ALL = 'all';
+const DAY_SCOPE_WEEKDAY = 'weekday';
+const DAY_SCOPE_WEEKEND = 'weekend';
+const DAY_SCOPE_MASKS = {
+  [DAY_SCOPE_ALL]: 0b1111111,
+  [DAY_SCOPE_WEEKDAY]: 0b0111110,
+  [DAY_SCOPE_WEEKEND]: 0b1000001,
+};
+const WEEKDAY_OPTIONS = [
+  { value: 1, label: '周一' },
+  { value: 2, label: '周二' },
+  { value: 3, label: '周三' },
+  { value: 4, label: '周四' },
+  { value: 5, label: '周五' },
+  { value: 6, label: '周六' },
+  { value: 0, label: '周日' },
+];
 const TIME_FORMAT_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
 function formatTokenHint(n) {
@@ -128,6 +146,12 @@ function normalizeVisualTier(tier = {}) {
   };
 }
 
+function normalizeTimeDayScope(dayScope) {
+  return Object.prototype.hasOwnProperty.call(DAY_SCOPE_MASKS, dayScope)
+    ? dayScope
+    : DAY_SCOPE_ALL;
+}
+
 function createDefaultVisualConfig() {
   return {
     pricing_mode: PRICING_MODE_TOKEN,
@@ -168,6 +192,7 @@ function createTimeVisualConfig(sourceConfig) {
         ...prices,
         start_time: '10:00',
         end_time: '12:00',
+        day_scope: DAY_SCOPE_ALL,
       }),
     ],
     default_tier: normalizeVisualTier({
@@ -184,7 +209,12 @@ function normalizeVisualConfig(config) {
       ...config,
       pricing_mode: PRICING_MODE_TIME,
       time_ranges: Array.isArray(config.time_ranges)
-        ? config.time_ranges.map((tier) => normalizeVisualTier(tier))
+        ? config.time_ranges.map((tier) =>
+            normalizeVisualTier({
+              ...tier,
+              day_scope: normalizeTimeDayScope(tier.day_scope),
+            }),
+          )
         : fallback.time_ranges,
       default_tier: normalizeVisualTier(
         config.default_tier || fallback.default_tier,
@@ -220,15 +250,19 @@ function timeToMinutes(value) {
   return Number(match[1]) * 60 + Number(match[2]);
 }
 
-function timeTierLabel(startTime, endTime) {
-  return `time_${startTime.replace(':', '')}_${endTime.replace(':', '')}`;
+function timeTierLabel(startTime, endTime, dayScope = DAY_SCOPE_ALL) {
+  const normalizedScope = normalizeTimeDayScope(dayScope);
+  const scopePrefix =
+    normalizedScope === DAY_SCOPE_ALL ? '' : `${normalizedScope}_`;
+  return `time_${scopePrefix}${startTime.replace(':', '')}_${endTime.replace(':', '')}`;
 }
 
-function timeRangeSegments(start, end, index) {
-  if (start < end) return [{ start, end, index }];
+function timeRangeSegments(start, end, index, dayScope) {
+  const dayMask = DAY_SCOPE_MASKS[normalizeTimeDayScope(dayScope)];
+  if (start < end) return [{ start, end, index, dayMask }];
   return [
-    { start, end: 24 * 60, index },
-    { start: 0, end, index },
+    { start, end: 24 * 60, index, dayMask },
+    { start: 0, end, index, dayMask },
   ];
 }
 
@@ -249,13 +283,17 @@ function validateTimeVisualConfig(config, translate = (key) => key) {
         n: index + 1,
       });
     }
-    segments.push(...timeRangeSegments(start, end, index));
+    segments.push(...timeRangeSegments(start, end, index, range.day_scope));
   }
 
   segments.sort((a, b) => a.start - b.start || a.end - b.end);
-  for (let index = 1; index < segments.length; index++) {
-    if (segments[index].start < segments[index - 1].end) {
-      const left = segments[index - 1].index + 1;
+  for (let index = 0; index < segments.length; index++) {
+    for (let previous = 0; previous < index; previous++) {
+      if (segments[previous].end <= segments[index].start) continue;
+      if ((segments[previous].dayMask & segments[index].dayMask) === 0) {
+        continue;
+      }
+      const left = segments[previous].index + 1;
       const right = segments[index].index + 1;
       if (left === right) continue;
       return translate('第 {{left}} 个和第 {{right}} 个时间段存在重叠', {
@@ -276,12 +314,36 @@ function buildTimeRangeCondition(startTime, endTime) {
   return `(${BEIJING_TIME_EXPR} >= ${start} || ${BEIJING_TIME_EXPR} < ${end})`;
 }
 
+function buildTimeDayCondition(dayScope) {
+  switch (normalizeTimeDayScope(dayScope)) {
+    case DAY_SCOPE_WEEKDAY:
+      return `(${BEIJING_WEEKDAY_EXPR} >= 1 && ${BEIJING_WEEKDAY_EXPR} <= 5)`;
+    case DAY_SCOPE_WEEKEND:
+      return `(${BEIJING_WEEKDAY_EXPR} == 0 || ${BEIJING_WEEKDAY_EXPR} == 6)`;
+    default:
+      return '';
+  }
+}
+
+function buildTimeRangeWithDayCondition(range) {
+  const timeCondition = buildTimeRangeCondition(
+    range.start_time,
+    range.end_time,
+  );
+  const dayCondition = buildTimeDayCondition(range.day_scope);
+  return dayCondition ? `${dayCondition} && (${timeCondition})` : timeCondition;
+}
+
 function generateTimeExpr(config) {
   if (validateTimeVisualConfig(config)) return '';
   const parts = config.time_ranges.map((range) => {
-    const label = timeTierLabel(range.start_time, range.end_time);
+    const label = timeTierLabel(
+      range.start_time,
+      range.end_time,
+      range.day_scope,
+    );
     const body = `tier("${label}", ${buildTierBodyExpr(range)})`;
-    return `${buildTimeRangeCondition(range.start_time, range.end_time)} ? ${body}`;
+    return `${buildTimeRangeWithDayCondition(range)} ? ${body}`;
   });
   parts.push(`tier("default", ${buildTierBodyExpr(config.default_tier)})`);
   return parts.join(' : ');
@@ -335,7 +397,7 @@ function tryParseVisualConfig(exprStr) {
     const bodyPat = `p\\s*\\*\\s*([\\d.eE+-]+)\\s*\\+\\s*c\\s*\\*\\s*([\\d.eE+-]+)${optCacheStr}`;
 
     const timeTierRe = new RegExp(
-      `tier\\("(time_(\\d{2})(\\d{2})_(\\d{2})(\\d{2})|default)",\\s*${bodyPat}\\)`,
+      `tier\\("(time_(?:(weekday|weekend)_)?(\\d{2})(\\d{2})_(\\d{2})(\\d{2})|default)",\\s*${bodyPat}\\)`,
       'g',
     );
     const timeRanges = [];
@@ -344,11 +406,11 @@ function tryParseVisualConfig(exprStr) {
     while ((timeMatch = timeTierRe.exec(exprStr)) !== null) {
       const tier = {
         conditions: [],
-        input_unit_cost: Number(timeMatch[6]),
-        output_unit_cost: Number(timeMatch[7]),
+        input_unit_cost: Number(timeMatch[7]),
+        output_unit_cost: Number(timeMatch[8]),
       };
       CACHE_VAR_MAP.forEach((cv, index) => {
-        const value = timeMatch[8 + index];
+        const value = timeMatch[9 + index];
         if (value != null) tier[cv.field] = Number(value);
       });
       if (timeMatch[1] === 'default') {
@@ -357,8 +419,9 @@ function tryParseVisualConfig(exprStr) {
         timeRanges.push(
           normalizeVisualTier({
             ...tier,
-            start_time: `${timeMatch[2]}:${timeMatch[3]}`,
-            end_time: `${timeMatch[4]}:${timeMatch[5]}`,
+            day_scope: normalizeTimeDayScope(timeMatch[2]),
+            start_time: `${timeMatch[3]}:${timeMatch[4]}`,
+            end_time: `${timeMatch[5]}:${timeMatch[6]}`,
           }),
         );
       }
@@ -901,6 +964,31 @@ function TimePriceCard({ tier, index, onUpdate, onRemove, t }) {
             marginBottom: 4,
           }}
         >
+          {t('适用日期')}
+        </Text>
+        <Select
+          value={normalizeTimeDayScope(tier.day_scope)}
+          onChange={(value) => onUpdate(index, 'day_scope', value)}
+          style={{ width: '100%' }}
+        >
+          <Select.Option value={DAY_SCOPE_ALL}>{t('每天')}</Select.Option>
+          <Select.Option value={DAY_SCOPE_WEEKDAY}>
+            {t('工作日（周一至周五）')}
+          </Select.Option>
+          <Select.Option value={DAY_SCOPE_WEEKEND}>
+            {t('休息日（周六至周日）')}
+          </Select.Option>
+        </Select>
+      </div>
+      <div style={{ marginBottom: 10 }}>
+        <Text
+          size='small'
+          style={{
+            color: 'var(--semi-color-text-2)',
+            display: 'block',
+            marginBottom: 4,
+          }}
+        >
           {t('北京时间范围')}
         </Text>
         <TimePicker
@@ -955,6 +1043,7 @@ function TimePricingEditor({ config, onChange, validationError, t }) {
           ...copyTierPrices(source),
           start_time: '14:00',
           end_time: '18:00',
+          day_scope: DAY_SCOPE_ALL,
         }),
       ],
     });
@@ -972,7 +1061,7 @@ function TimePricingEditor({ config, onChange, validationError, t }) {
       <Banner
         type='info'
         description={t(
-          '所有时间固定使用北京时间，区间包含开始时间、不包含结束时间；支持跨午夜。未命中时使用默认价格。',
+          '每个时间段可选择每天、工作日或休息日；所有时间固定使用北京时间，区间包含开始时间、不包含结束时间，支持跨午夜。未命中时使用默认价格。',
         )}
         style={{ marginBottom: 12 }}
       />
@@ -1548,6 +1637,10 @@ function currentBeijingTime() {
   return `${hour === '24' ? '00' : hour}:${minute}`;
 }
 
+function currentBeijingWeekday() {
+  return datePartInZone('Asia/Shanghai', 'weekday');
+}
+
 function datePartInZone(timezone, part) {
   const options = { timeZone: timezone || 'UTC' };
   if (part === 'weekday') options.weekday = 'short';
@@ -1557,7 +1650,14 @@ function datePartInZone(timezone, part) {
   return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(value);
 }
 
-function evalExprLocally(exprStr, p, c, extraTokenValues, previewTime) {
+function evalExprLocally(
+  exprStr,
+  p,
+  c,
+  extraTokenValues,
+  previewTime,
+  previewWeekday,
+) {
   try {
     let matchedTier = '';
     const tierFn = (name, value) => {
@@ -1579,7 +1679,10 @@ function evalExprLocally(exprStr, p, c, extraTokenValues, previewTime) {
         timezone === 'Asia/Shanghai'
           ? previewMinute
           : datePartInZone(timezone, 'minute'),
-      weekday: (timezone) => datePartInZone(timezone, 'weekday'),
+      weekday: (timezone) =>
+        timezone === 'Asia/Shanghai'
+          ? previewWeekday
+          : datePartInZone(timezone, 'weekday'),
       month: (timezone) => datePartInZone(timezone, 'month'),
       day: (timezone) => datePartInZone(timezone, 'day'),
       max: Math.max,
@@ -1974,6 +2077,7 @@ export default function TieredPricingEditor({
   const [audioInputTokens, setAudioInputTokens] = useState(0);
   const [audioOutputTokens, setAudioOutputTokens] = useState(0);
   const [previewTime, setPreviewTime] = useState(currentBeijingTime);
+  const [previewWeekday, setPreviewWeekday] = useState(currentBeijingWeekday);
 
   const currentRequestRuleExpr = requestRuleExpr || '';
   const parsedRequestRuleGroups = useMemo(
@@ -2130,6 +2234,7 @@ export default function TieredPricingEditor({
       completionTokens,
       extraTokenValues,
       previewTime,
+      previewWeekday,
     );
     if (!result.error) {
       result.cost =
@@ -2149,6 +2254,7 @@ export default function TieredPricingEditor({
     audioInputTokens,
     audioOutputTokens,
     previewTime,
+    previewWeekday,
   ]);
 
   return (
@@ -2302,22 +2408,47 @@ export default function TieredPricingEditor({
           </div>
         </div>
         {visualConfig?.pricing_mode === PRICING_MODE_TIME ? (
-          <div style={{ marginBottom: 12 }}>
-            <Text size='small' className='mb-1' style={{ display: 'block' }}>
-              {t('估算时间（北京时间）')}
-            </Text>
-            <TimePicker
-              format='HH:mm'
-              value={previewTime}
-              onChangeWithDateFirst={false}
-              onChange={(value) => {
-                if (typeof value === 'string' && TIME_FORMAT_RE.test(value)) {
-                  setPreviewTime(value);
-                }
-              }}
-              showClear={false}
-              style={{ width: '100%' }}
-            />
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+              gap: 12,
+              marginBottom: 12,
+            }}
+          >
+            <div>
+              <Text size='small' className='mb-1' style={{ display: 'block' }}>
+                {t('估算星期')}
+              </Text>
+              <Select
+                value={previewWeekday}
+                onChange={setPreviewWeekday}
+                style={{ width: '100%' }}
+              >
+                {WEEKDAY_OPTIONS.map((option) => (
+                  <Select.Option key={option.value} value={option.value}>
+                    {t(option.label)}
+                  </Select.Option>
+                ))}
+              </Select>
+            </div>
+            <div>
+              <Text size='small' className='mb-1' style={{ display: 'block' }}>
+                {t('估算时间（北京时间）')}
+              </Text>
+              <TimePicker
+                format='HH:mm'
+                value={previewTime}
+                onChangeWithDateFirst={false}
+                onChange={(value) => {
+                  if (typeof value === 'string' && TIME_FORMAT_RE.test(value)) {
+                    setPreviewTime(value);
+                  }
+                }}
+                showClear={false}
+                style={{ width: '100%' }}
+              />
+            </div>
           </div>
         ) : null}
         {/* Cache token inputs — shown when expression uses cache variables */}

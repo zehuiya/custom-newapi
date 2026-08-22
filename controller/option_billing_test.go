@@ -17,6 +17,10 @@ func TestValidateBillingExprOption(t *testing.T) {
 			value: `{"model-a":"(hour(\"Asia/Shanghai\") * 60 + minute(\"Asia/Shanghai\")) >= 600 && (hour(\"Asia/Shanghai\") * 60 + minute(\"Asia/Shanghai\")) < 720 ? tier(\"time_1000_1200\", p * 1 + c * 2) : tier(\"default\", p * 3 + c * 4)"}`,
 		},
 		{
+			name:  "weekday and weekend time pricing",
+			value: `{"model-a":"(weekday(\"Asia/Shanghai\") >= 1 && weekday(\"Asia/Shanghai\") <= 5) && ((hour(\"Asia/Shanghai\") * 60 + minute(\"Asia/Shanghai\")) >= 600 && (hour(\"Asia/Shanghai\") * 60 + minute(\"Asia/Shanghai\")) < 720) ? tier(\"time_weekday_1000_1200\", p * 1 + c * 2) : (weekday(\"Asia/Shanghai\") == 0 || weekday(\"Asia/Shanghai\") == 6) && ((hour(\"Asia/Shanghai\") * 60 + minute(\"Asia/Shanghai\")) >= 600 && (hour(\"Asia/Shanghai\") * 60 + minute(\"Asia/Shanghai\")) < 720) ? tier(\"time_weekend_1000_1200\", p * 2 + c * 3) : tier(\"default\", p * 3 + c * 4)"}`,
+		},
+		{
 			name:    "invalid json",
 			value:   `{`,
 			wantErr: true,
@@ -34,6 +38,11 @@ func TestValidateBillingExprOption(t *testing.T) {
 		{
 			name:    "negative result hidden in time window",
 			value:   `{"model-a":"(hour(\"Asia/Shanghai\") * 60 + minute(\"Asia/Shanghai\")) >= 600 && (hour(\"Asia/Shanghai\") * 60 + minute(\"Asia/Shanghai\")) < 601 ? tier(\"bad\", p * -1) : tier(\"default\", p * 1)"}`,
+			wantErr: true,
+		},
+		{
+			name:    "negative result hidden in weekend",
+			value:   `{"model-a":"weekday(\"Asia/Shanghai\") == 0 || weekday(\"Asia/Shanghai\") == 6 ? tier(\"weekend_bad\", p * -1) : tier(\"default\", p * 1)"}`,
 			wantErr: true,
 		},
 	}

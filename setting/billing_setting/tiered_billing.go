@@ -80,19 +80,36 @@ func smokeTestExpr(exprStr string) error {
 		}
 	}
 
-	// A time-based expression may hide an invalid branch until that price window
-	// becomes active. Validate every Beijing minute when time functions are used.
-	if strings.Contains(exprStr, "hour(") || strings.Contains(exprStr, "minute(") {
+	// A time-based expression may hide an invalid branch until its time window or
+	// weekday becomes active. Cover a full Beijing week when weekday() is used.
+	usesTimeOfDay := strings.Contains(exprStr, "hour(") || strings.Contains(exprStr, "minute(")
+	usesWeekday := strings.Contains(exprStr, "weekday(")
+	if usesTimeOfDay || usesWeekday {
 		beijing := time.FixedZone("Asia/Shanghai", 8*60*60)
-		dayStart := time.Date(2026, time.January, 1, 0, 0, 0, 0, beijing)
+		weekStart := time.Date(2026, time.January, 5, 0, 0, 0, 0, beijing) // Monday
 		allDimensions := billingexpr.TokenParams{
 			P: 1000, C: 1000, CR: 100, CC: 100, CC1h: 100,
 			Img: 100, ImgO: 100, AI: 100, AO: 100,
 		}
-		for minuteOfDay := 0; minuteOfDay < 24*60; minuteOfDay++ {
-			request := requestInputAt(dayStart.Add(time.Duration(minuteOfDay) * time.Minute))
-			if err := validateSmokeTestResult(exprStr, allDimensions, request); err != nil {
-				return fmt.Errorf("Beijing time %02d:%02d: %w", minuteOfDay/60, minuteOfDay%60, err)
+		daysToCheck := 1
+		if usesWeekday {
+			daysToCheck = 7
+		}
+		minutesToCheck := 1
+		if usesTimeOfDay {
+			minutesToCheck = 24 * 60
+		}
+		for dayOffset := 0; dayOffset < daysToCheck; dayOffset++ {
+			dayStart := weekStart.AddDate(0, 0, dayOffset)
+			for minuteOfDay := 0; minuteOfDay < minutesToCheck; minuteOfDay++ {
+				at := dayStart.Add(time.Duration(minuteOfDay) * time.Minute)
+				request := requestInputAt(at)
+				if err := validateSmokeTestResult(exprStr, allDimensions, request); err != nil {
+					return fmt.Errorf(
+						"Beijing %s %02d:%02d: %w",
+						at.Weekday(), minuteOfDay/60, minuteOfDay%60, err,
+					)
+				}
 			}
 		}
 	}

@@ -990,6 +990,60 @@ func TestTimePricingUsesFrozenBeijingEvaluationTime(t *testing.T) {
 	}
 }
 
+func TestTimePricingWeekdayAndWeekendFilters(t *testing.T) {
+	exprStr := `(weekday("Asia/Shanghai") >= 1 && weekday("Asia/Shanghai") <= 5) && ((hour("Asia/Shanghai") * 60 + minute("Asia/Shanghai")) >= 600 && (hour("Asia/Shanghai") * 60 + minute("Asia/Shanghai")) < 720) ? tier("time_weekday_1000_1200", p * 1) : (weekday("Asia/Shanghai") == 0 || weekday("Asia/Shanghai") == 6) && ((hour("Asia/Shanghai") * 60 + minute("Asia/Shanghai")) >= 600 && (hour("Asia/Shanghai") * 60 + minute("Asia/Shanghai")) < 720) ? tier("time_weekend_1000_1200", p * 2) : tier("default", p * 3)`
+	beijing := time.FixedZone("Asia/Shanghai", 8*60*60)
+	tests := []struct {
+		name     string
+		at       time.Time
+		wantTier string
+		wantCost float64
+	}{
+		{name: "Monday workday", at: time.Date(2026, time.August, 17, 10, 0, 0, 0, beijing), wantTier: "time_weekday_1000_1200", wantCost: 100},
+		{name: "Friday workday", at: time.Date(2026, time.August, 21, 11, 59, 0, 0, beijing), wantTier: "time_weekday_1000_1200", wantCost: 100},
+		{name: "Saturday weekend", at: time.Date(2026, time.August, 22, 10, 0, 0, 0, beijing), wantTier: "time_weekend_1000_1200", wantCost: 200},
+		{name: "Sunday weekend", at: time.Date(2026, time.August, 23, 11, 59, 0, 0, beijing), wantTier: "time_weekend_1000_1200", wantCost: 200},
+		{name: "workday outside time", at: time.Date(2026, time.August, 17, 12, 0, 0, 0, beijing), wantTier: "default", wantCost: 300},
+		{name: "weekend outside time", at: time.Date(2026, time.August, 23, 9, 59, 0, 0, beijing), wantTier: "default", wantCost: 300},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cost, trace, err := billingexpr.RunExprWithRequest(exprStr, billingexpr.TokenParams{P: 100}, billingexpr.RequestInput{
+				EvaluationTimeUnixMilli: tt.at.UnixMilli(),
+			})
+			require.NoError(t, err)
+			require.Equal(t, tt.wantCost, cost)
+			require.Equal(t, tt.wantTier, trace.MatchedTier)
+		})
+	}
+}
+
+func TestTieredSettlementKeepsPreConsumeWeekdayAcrossBoundary(t *testing.T) {
+	exprStr := `weekday("Asia/Shanghai") >= 1 && weekday("Asia/Shanghai") <= 5 ? tier("weekday", p * 1) : tier("weekend", p * 2)`
+	beijing := time.FixedZone("Asia/Shanghai", 8*60*60)
+	requestStart := time.Date(2026, time.August, 21, 23, 59, 0, 0, beijing) // Friday
+	responseEnd := time.Date(2026, time.August, 22, 0, 1, 0, 0, beijing)    // Saturday
+	snap := &billingexpr.BillingSnapshot{
+		BillingMode:          "tiered_expr",
+		ExprString:           exprStr,
+		ExprHash:             billingexpr.ExprHashString(exprStr),
+		GroupRatio:           1,
+		EstimatedTier:        "weekday",
+		BillingTimeUnixMilli: requestStart.UnixMilli(),
+		QuotaPerUnit:         500_000,
+		ExprVersion:          1,
+	}
+
+	result, err := billingexpr.ComputeTieredQuotaWithRequest(snap, billingexpr.TokenParams{P: 100}, billingexpr.RequestInput{
+		EvaluationTimeUnixMilli: responseEnd.UnixMilli(),
+	})
+	require.NoError(t, err)
+	require.Equal(t, "weekday", result.MatchedTier)
+	require.Equal(t, 50, result.ActualQuotaAfterGroup)
+	require.False(t, result.CrossedTier)
+}
+
 func TestTieredSettlementKeepsPreConsumeTimeAcrossBoundary(t *testing.T) {
 	exprStr := `(hour("Asia/Shanghai") * 60 + minute("Asia/Shanghai")) >= 600 && (hour("Asia/Shanghai") * 60 + minute("Asia/Shanghai")) < 720 ? tier("10:00-12:00", p * 1) : tier("default", p * 3)`
 	beijing := time.FixedZone("Asia/Shanghai", 8*60*60)
