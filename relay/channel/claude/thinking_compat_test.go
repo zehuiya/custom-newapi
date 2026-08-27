@@ -45,6 +45,7 @@ func TestConvertClaudeRequestFillsMissingThinkingBeforeToolUse(t *testing.T) {
 
 			converted, err := (&Adaptor{}).ConvertClaudeRequest(nil, &relaycommon.RelayInfo{
 				OriginModelName: tt.model,
+				RequestURLPath:  "/v1/messages",
 				ChannelMeta: &relaycommon.ChannelMeta{
 					UpstreamModelName: tt.model,
 				},
@@ -99,7 +100,8 @@ func TestConvertClaudeRequestFillsEveryMissingAssistantTurn(t *testing.T) {
 	}
 
 	_, err := (&Adaptor{}).ConvertClaudeRequest(nil, &relaycommon.RelayInfo{
-		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: request.Model},
+		RequestURLPath: "/v1/messages",
+		ChannelMeta:    &relaycommon.ChannelMeta{UpstreamModelName: request.Model},
 	}, request)
 	require.NoError(t, err)
 
@@ -145,7 +147,8 @@ func TestConvertClaudeRequestPreservesExistingThinkingAndUnknownFields(t *testin
 
 	originalContent := request.Messages[0].Content
 	_, err := (&Adaptor{}).ConvertClaudeRequest(nil, &relaycommon.RelayInfo{
-		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: request.Model},
+		RequestURLPath: "/v1/messages",
+		ChannelMeta:    &relaycommon.ChannelMeta{UpstreamModelName: request.Model},
 	}, request)
 	require.NoError(t, err)
 	require.Equal(t, originalContent, request.Messages[0].Content)
@@ -167,7 +170,8 @@ func TestConvertClaudeRequestPreservesExistingEmptyThinkingBlock(t *testing.T) {
 
 	originalContent := request.Messages[0].Content
 	_, err := (&Adaptor{}).ConvertClaudeRequest(nil, &relaycommon.RelayInfo{
-		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: request.Model},
+		RequestURLPath: "/v1/messages",
+		ChannelMeta:    &relaycommon.ChannelMeta{UpstreamModelName: request.Model},
 	}, request)
 	require.NoError(t, err)
 	require.Equal(t, originalContent, request.Messages[0].Content)
@@ -188,7 +192,8 @@ func TestConvertClaudeRequestLeavesOtherModelsUnchanged(t *testing.T) {
 
 	originalContent := request.Messages[0].Content
 	_, err := (&Adaptor{}).ConvertClaudeRequest(nil, &relaycommon.RelayInfo{
-		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: request.Model},
+		RequestURLPath: "/v1/messages",
+		ChannelMeta:    &relaycommon.ChannelMeta{UpstreamModelName: request.Model},
 	}, request)
 	require.NoError(t, err)
 	require.Equal(t, originalContent, request.Messages[0].Content)
@@ -231,17 +236,24 @@ func TestConvertClaudeRequestUsesFinalUpstreamModelForCompatibility(t *testing.T
 			wantPatched:   false,
 		},
 		{
-			name:          "similar pro model name is not matched",
+			name:          "containing pro model name is matched",
 			requestModel:  "deepseek-public-alias",
 			originModel:   "deepseek-public-alias",
-			upstreamModel: "deepseek-v4-professional",
-			wantPatched:   false,
+			upstreamModel: "vendor/deepseek-v4-pro-0813-preview",
+			wantPatched:   true,
 		},
 		{
-			name:          "similar flash model name is not matched",
+			name:          "containing flash model name is matched",
 			requestModel:  "deepseek-public-alias",
 			originModel:   "deepseek-public-alias",
-			upstreamModel: "deepseek-v4-flashlight",
+			upstreamModel: "vendor-deepseek-v4-flash-preview",
+			wantPatched:   true,
+		},
+		{
+			name:          "nearby model name without target substring is not matched",
+			requestModel:  "deepseek-public-alias",
+			originModel:   "deepseek-public-alias",
+			upstreamModel: "deepseek-v4-fast",
 			wantPatched:   false,
 		},
 	}
@@ -256,6 +268,7 @@ func TestConvertClaudeRequestUsesFinalUpstreamModelForCompatibility(t *testing.T
 			}
 			_, err := (&Adaptor{}).ConvertClaudeRequest(nil, &relaycommon.RelayInfo{
 				OriginModelName: tt.originModel,
+				RequestURLPath:  "/v1/messages",
 				ChannelMeta: &relaycommon.ChannelMeta{
 					UpstreamModelName: tt.upstreamModel,
 				},
@@ -270,11 +283,19 @@ func TestConvertClaudeRequestUsesFinalUpstreamModelForCompatibility(t *testing.T
 
 func TestConvertClaudeRequestHandlesMissingRelayInfoAndChannelMeta(t *testing.T) {
 	tests := []struct {
-		name string
-		info *relaycommon.RelayInfo
+		name        string
+		info        *relaycommon.RelayInfo
+		wantPatched bool
 	}{
 		{name: "nil relay info"},
-		{name: "nil channel meta", info: &relaycommon.RelayInfo{OriginModelName: "deepseek-v4-pro"}},
+		{
+			name: "nil channel meta",
+			info: &relaycommon.RelayInfo{
+				OriginModelName: "deepseek-v4-pro",
+				RequestURLPath:  "/v1/messages",
+			},
+			wantPatched: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -287,7 +308,44 @@ func TestConvertClaudeRequestHandlesMissingRelayInfoAndChannelMeta(t *testing.T)
 			}
 			_, err := (&Adaptor{}).ConvertClaudeRequest(nil, tt.info, request)
 			require.NoError(t, err)
-			require.IsType(t, []any{}, request.Messages[0].Content)
+			_, patched := request.Messages[0].Content.([]any)
+			require.Equal(t, tt.wantPatched, patched)
+		})
+	}
+}
+
+func TestConvertClaudeRequestOnlyPatchesMessagesPath(t *testing.T) {
+	tests := []struct {
+		name        string
+		requestPath string
+		wantPatched bool
+	}{
+		{name: "messages path", requestPath: "/v1/messages", wantPatched: true},
+		{name: "messages path with query", requestPath: "/v1/messages?beta=true", wantPatched: true},
+		{name: "absolute messages URL", requestPath: "https://gateway.example/v1/messages?beta=true", wantPatched: true},
+		{name: "chat completions path", requestPath: "/v1/chat/completions"},
+		{name: "messages subpath", requestPath: "/v1/messages/batches"},
+		{name: "missing path"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request := &dto.ClaudeRequest{
+				Model: "public-alias",
+				Messages: []dto.ClaudeMessage{
+					{Role: "assistant", Content: "answer"},
+				},
+			}
+			_, err := (&Adaptor{}).ConvertClaudeRequest(nil, &relaycommon.RelayInfo{
+				RequestURLPath: tt.requestPath,
+				ChannelMeta: &relaycommon.ChannelMeta{
+					UpstreamModelName: "vendor/deepseek-v4-pro-0813",
+				},
+			}, request)
+			require.NoError(t, err)
+
+			_, patched := request.Messages[0].Content.([]any)
+			require.Equal(t, tt.wantPatched, patched)
 		})
 	}
 }

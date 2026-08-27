@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"net/url"
 	"strings"
 
 	"github.com/QuantumNous/new-api/dto"
@@ -15,7 +16,8 @@ const deepSeekThinkingPlaceholder = "...[truncated]"
 // limited to the affected DeepSeek models: official Claude thinking blocks are
 // signed and must be passed back unchanged.
 func patchDeepSeekThinkingHistory(info *relaycommon.RelayInfo, request *dto.ClaudeRequest) {
-	if request == nil || !isDeepSeekThinkingPassbackModel(finalClaudeModelName(info, request)) {
+	if request == nil || !isClaudeMessagesRequest(info) ||
+		!isDeepSeekThinkingPassbackModel(finalClaudeModelName(info, request)) {
 		return
 	}
 
@@ -26,6 +28,14 @@ func patchDeepSeekThinkingHistory(info *relaycommon.RelayInfo, request *dto.Clau
 		}
 		message.Content = ensureThinkingBlock(message.Content)
 	}
+}
+
+func isClaudeMessagesRequest(info *relaycommon.RelayInfo) bool {
+	if info == nil {
+		return false
+	}
+	requestURL, err := url.Parse(info.RequestURLPath)
+	return err == nil && requestURL.Path == "/v1/messages"
 }
 
 func finalClaudeModelName(info *relaycommon.RelayInfo, request *dto.ClaudeRequest) string {
@@ -43,13 +53,7 @@ func finalClaudeModelName(info *relaycommon.RelayInfo, request *dto.ClaudeReques
 
 func isDeepSeekThinkingPassbackModel(model string) bool {
 	model = strings.TrimSpace(model)
-	model = strings.TrimPrefix(model, "anthropic:")
-	for _, family := range []string{"deepseek-v4-flash", "deepseek-v4-pro"} {
-		if model == family || strings.HasPrefix(model, family+"-") {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(model, "deepseek-v4-flash") || strings.Contains(model, "deepseek-v4-pro")
 }
 
 func ensureThinkingBlock(content any) any {
