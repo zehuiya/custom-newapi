@@ -210,10 +210,38 @@ func TestConvertClaudeRequestUsesFinalUpstreamModelForCompatibility(t *testing.T
 			wantPatched:   true,
 		},
 		{
+			name:          "public alias mapped to versioned affected upstream",
+			requestModel:  "deepseek-public-alias",
+			originModel:   "deepseek-public-alias",
+			upstreamModel: "deepseek-v4-pro-0813",
+			wantPatched:   true,
+		},
+		{
+			name:          "provider-prefixed versioned affected upstream",
+			requestModel:  "deepseek-public-alias",
+			originModel:   "deepseek-public-alias",
+			upstreamModel: "anthropic:deepseek-v4-flash-20260813",
+			wantPatched:   true,
+		},
+		{
 			name:          "affected public name mapped to official Claude",
 			requestModel:  "deepseek-v4-pro",
 			originModel:   "anthropic:deepseek-v4-pro",
 			upstreamModel: "claude-sonnet-4-20250514",
+			wantPatched:   false,
+		},
+		{
+			name:          "similar pro model name is not matched",
+			requestModel:  "deepseek-public-alias",
+			originModel:   "deepseek-public-alias",
+			upstreamModel: "deepseek-v4-professional",
+			wantPatched:   false,
+		},
+		{
+			name:          "similar flash model name is not matched",
+			requestModel:  "deepseek-public-alias",
+			originModel:   "deepseek-public-alias",
+			upstreamModel: "deepseek-v4-flashlight",
 			wantPatched:   false,
 		},
 	}

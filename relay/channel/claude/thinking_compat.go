@@ -44,12 +44,12 @@ func finalClaudeModelName(info *relaycommon.RelayInfo, request *dto.ClaudeReques
 func isDeepSeekThinkingPassbackModel(model string) bool {
 	model = strings.TrimSpace(model)
 	model = strings.TrimPrefix(model, "anthropic:")
-	switch model {
-	case "deepseek-v4-flash", "deepseek-v4-pro":
-		return true
-	default:
-		return false
+	for _, family := range []string{"deepseek-v4-flash", "deepseek-v4-pro"} {
+		if model == family || strings.HasPrefix(model, family+"-") {
+			return true
+		}
 	}
+	return false
 }
 
 func ensureThinkingBlock(content any) any {
