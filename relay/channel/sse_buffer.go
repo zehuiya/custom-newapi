@@ -59,7 +59,7 @@ func ConsumeBufferedSSE(c *gin.Context, resp *http.Response, info *relaycommon.R
 
 	timeout := time.Duration(constant.StreamingTimeout) * time.Second
 	if timeout <= 0 {
-		timeout = 5 * time.Minute
+		timeout = time.Duration(constant.DefaultStreamingTimeout) * time.Second
 	}
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
