@@ -10,6 +10,13 @@ import (
 
 const deepSeekThinkingPlaceholder = "...[truncated]"
 
+var deepSeekThinkingPassbackModelSubstrings = [...]string{
+	"deepseek-v4-pro",
+	"deepseek-v4-flash",
+	"deepseek-flash",
+	"deepseek-v4.1-flash",
+}
+
 // patchDeepSeekThinkingHistory works around DeepSeek's Anthropic-compatible
 // endpoint requiring a thinking block to be replayed for assistant history,
 // even when the model did not return one. This synthetic block is intentionally
@@ -53,7 +60,12 @@ func finalClaudeModelName(info *relaycommon.RelayInfo, request *dto.ClaudeReques
 
 func isDeepSeekThinkingPassbackModel(model string) bool {
 	model = strings.TrimSpace(model)
-	return strings.Contains(model, "deepseek-v4-flash") || strings.Contains(model, "deepseek-v4-pro")
+	for _, modelSubstring := range deepSeekThinkingPassbackModelSubstrings {
+		if strings.Contains(model, modelSubstring) {
+			return true
+		}
+	}
+	return false
 }
 
 func ensureThinkingBlock(content any) any {

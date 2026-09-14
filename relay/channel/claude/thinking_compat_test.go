@@ -17,6 +17,8 @@ func TestConvertClaudeRequestFillsMissingThinkingBeforeToolUse(t *testing.T) {
 		{name: "flash without thinking config", model: "deepseek-v4-flash"},
 		{name: "pro with thinking enabled", model: "deepseek-v4-pro", thinking: &dto.Thinking{Type: "enabled"}},
 		{name: "provider-prefixed model with thinking disabled", model: "anthropic:deepseek-v4-flash", thinking: &dto.Thinking{Type: "disabled"}},
+		{name: "legacy flash without thinking config", model: "deepseek-flash"},
+		{name: "v4.1 flash with thinking enabled", model: "deepseek-v4.1-flash", thinking: &dto.Thinking{Type: "enabled"}},
 	}
 
 	for _, tt := range tests {
@@ -247,6 +249,20 @@ func TestConvertClaudeRequestUsesFinalUpstreamModelForCompatibility(t *testing.T
 			requestModel:  "deepseek-public-alias",
 			originModel:   "deepseek-public-alias",
 			upstreamModel: "vendor-deepseek-v4-flash-preview",
+			wantPatched:   true,
+		},
+		{
+			name:          "containing legacy flash model name is matched",
+			requestModel:  "deepseek-public-alias",
+			originModel:   "deepseek-public-alias",
+			upstreamModel: "vendor/deepseek-flash-202609-preview",
+			wantPatched:   true,
+		},
+		{
+			name:          "containing v4.1 flash model name is matched",
+			requestModel:  "deepseek-public-alias",
+			originModel:   "deepseek-public-alias",
+			upstreamModel: "anthropic:deepseek-v4.1-flash-20260913",
 			wantPatched:   true,
 		},
 		{
