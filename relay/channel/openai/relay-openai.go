@@ -20,6 +20,7 @@ import (
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/tidwall/gjson"
 )
 
 func injectSyntheticCacheInfoForOpenAIUsage(usage *dto.Usage, info *relaycommon.RelayInfo) bool {
@@ -89,6 +90,26 @@ func sendStreamData(c *gin.Context, info *relaycommon.RelayInfo, data string, fo
 	return helper.ObjectData(c, lastStreamResponse)
 }
 
+func openAIStreamError(data string) *types.NewAPIError {
+	errorData := gjson.Get(data, "error")
+	if !errorData.Exists() || errorData.Type == gjson.Null {
+		return nil
+	}
+
+	var errorValue any
+	if err := common.Unmarshal([]byte(errorData.Raw), &errorValue); err != nil {
+		return types.NewOpenAIError(fmt.Errorf("invalid upstream stream error: %w", err), types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+	}
+	oaiError := dto.GetOpenAIError(errorValue)
+	if oaiError == nil {
+		return nil
+	}
+	if oaiError.Message == "" {
+		oaiError.Message = "upstream stream error"
+	}
+	return types.WithOpenAIError(*oaiError, http.StatusBadGateway)
+}
+
 func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	if resp == nil || resp.Body == nil {
 		logger.LogError(c, "invalid response or response body")
@@ -108,11 +129,17 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	var streamItems []string // store stream items
 	var lastStreamData string
 	var secondLastStreamData string // 存储倒数第二个stream data，用于音频模型
+	var upstreamStreamError *types.NewAPIError
 
 	// 检查是否为音频模型
 	isAudioModel := strings.Contains(strings.ToLower(model), "audio")
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+		if streamError := openAIStreamError(data); streamError != nil {
+			upstreamStreamError = streamError
+			sr.Stop(streamError)
+			return
+		}
 		if lastStreamData != "" {
 			if err := HandleStreamFormat(c, info, lastStreamData, info.ChannelSetting.ForceFormat); err != nil {
 				common.SysLog("error handling stream format: " + err.Error())
@@ -129,6 +156,27 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			streamItems = append(streamItems, data)
 		}
 	})
+	if upstreamStreamError != nil {
+		if c.Writer.Written() {
+			var payload any = gin.H{"error": upstreamStreamError.ToOpenAIError()}
+			if info.RelayFormat == types.RelayFormatClaude {
+				oaiError := upstreamStreamError.ToOpenAIError()
+				payload = gin.H{"type": "error", "error": types.ClaudeError{Type: oaiError.Type, Message: oaiError.Message}}
+			}
+			if encoded, err := common.Marshal(payload); err == nil {
+				if _, err := fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", encoded); err != nil {
+					logger.LogError(c, "failed to send upstream stream error: "+err.Error())
+				}
+				_ = helper.FlushWriter(c)
+			} else {
+				logger.LogError(c, "failed to marshal upstream stream error: "+err.Error())
+			}
+			types.ErrOptionWithSkipRetry()(upstreamStreamError)
+		} else {
+			c.Writer.Header().Del("Content-Type")
+		}
+		return nil, upstreamStreamError
+	}
 
 	// 对音频模型，从倒数第二个stream data中提取usage信息
 	if isAudioModel && secondLastStreamData != "" {
