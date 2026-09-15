@@ -1,0 +1,27 @@
+relay/channel/openai/relay-openai.go
+  s_10d0b4cbf278c6::t_302f9f99d6dd70 23,93-112,132,138-142,159-179
+controller/relay.go
+  s_10d0b4cbf278c6::t_302f9f99d6dd70 106-108
+relay/channel/openai/relay_stream_error_test.go
+  s_10d0b4cbf278c6::t_25a03df9b1747e 78-81
+  s_10d0b4cbf278c6::t_1c3c8dae37e06c 1-9,11-32,42-43,45-77,82-87,89-112,143-144,146-175
+  s_10d0b4cbf278c6::t_b090ecfcf32eac 113-142
+  s_10d0b4cbf278c6::t_d2a56fd10ad660 10,33-41,44,88,145
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.12",
+  "base_commit_sha": "beea575760195f5d008d2667ccfa83bb875cf51b",
+  "prompts": {},
+  "logical_commit_id": "beea575760195f5d008d2667ccfa83bb875cf51b",
+  "sessions": {
+    "s_10d0b4cbf278c6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019e9112-50c3-7ed0-8ba6-bfbe99f02c65",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "xieqingxing <xieqingxing@bigo.sg>"
+    }
+  }
+}
