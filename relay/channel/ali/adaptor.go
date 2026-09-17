@@ -22,6 +22,7 @@ import (
 
 type Adaptor struct {
 	IsSyncImageModel bool
+	TTSSSE           bool
 }
 
 /*
@@ -80,6 +81,8 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 		}
 	default:
 		switch info.RelayMode {
+		case constant.RelayModeAudioSpeech:
+			fullRequestURL = fmt.Sprintf("%s/api/v1/services/aigc/multimodal-generation/generation", info.ChannelBaseUrl)
 		case constant.RelayModeEmbeddings:
 			fullRequestURL = fmt.Sprintf("%s/compatible-mode/v1/embeddings", info.ChannelBaseUrl)
 		case constant.RelayModeRerank:
@@ -115,6 +118,10 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *rel
 	req.Set("Authorization", "Bearer "+info.ApiKey)
 	if info.IsStream {
 		req.Set("X-DashScope-SSE", "enable")
+	}
+	if info.RelayMode == constant.RelayModeAudioSpeech && a.TTSSSE {
+		req.Set("X-DashScope-SSE", "enable")
+		req.Set("Accept", "text/event-stream")
 	}
 	if c.GetString("plugin") != "" {
 		req.Set("X-DashScope-Plugin", c.GetString("plugin"))
@@ -207,8 +214,7 @@ func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *relaycommon.Rela
 }
 
 func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.AudioRequest) (io.Reader, error) {
-	//TODO implement me
-	return nil, errors.New("not implemented")
+	return a.convertTTSRequest(info, request)
 }
 
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
@@ -231,6 +237,8 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 		return adaptor.DoResponse(c, resp, info)
 	default:
 		switch info.RelayMode {
+		case constant.RelayModeAudioSpeech:
+			return handleTTSResponse(c, resp, info)
 		case constant.RelayModeImagesGenerations:
 			err, usage = aliImageHandler(a, c, resp, info)
 		case constant.RelayModeImagesEdits:

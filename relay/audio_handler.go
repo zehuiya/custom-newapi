@@ -70,7 +70,11 @@ func AudioHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 	if usage.(*dto.Usage).CompletionTokenDetails.AudioTokens > 0 || usage.(*dto.Usage).PromptTokensDetails.AudioTokens > 0 {
 		service.PostAudioConsumeQuota(c, info, usage.(*dto.Usage), "")
 	} else {
-		service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil)
+		var extraContent []string
+		if characters, exists := c.Get("tts_usage_characters"); exists {
+			extraContent = []string{fmt.Sprintf("TTS usage: %v characters", characters)}
+		}
+		service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), extraContent)
 	}
 
 	return nil

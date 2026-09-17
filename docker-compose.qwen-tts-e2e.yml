@@ -1,0 +1,71 @@
+services:
+  new-api:
+    image: custom-newapi-qwen-tts-e2e:local
+    build:
+      context: .test/qwen-tts-e2e
+      dockerfile: ../../tests/qwen_tts_e2e/Dockerfile
+    ports:
+      - "127.0.0.1:13009:3000"
+    command: --log-dir /app/logs
+    environment:
+      SQL_DSN: postgresql://tts:tts@postgres:5432/tts
+      REDIS_CONN_STRING: redis://redis:6379
+      SESSION_SECRET: qwen-tts-e2e-local-session
+      TZ: Asia/Shanghai
+      MEMORY_CACHE_ENABLED: "true"
+      SYNC_FREQUENCY: "1"
+      ERROR_LOG_ENABLED: "true"
+      BATCH_UPDATE_ENABLED: "false"
+      GLOBAL_API_RATE_LIMIT_ENABLE: "false"
+      GLOBAL_WEB_RATE_LIMIT_ENABLE: "false"
+      SEARCH_RATE_LIMIT_ENABLE: "false"
+      STREAMING_TIMEOUT: "5"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mock-upstream:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:3000/api/status | grep -q '\"success\":true'"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+    volumes:
+      - qwen_tts_logs:/app/logs
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: tts
+      POSTGRES_PASSWORD: tts
+      POSTGRES_DB: tts
+    volumes:
+      - qwen_tts_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tts -d tts"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+  mock-upstream:
+    image: python:3.12-alpine
+    command: ["python", "/app/mock_upstream.py"]
+    ports:
+      - "127.0.0.1:18089:18080"
+    volumes:
+      - ./tests/qwen_tts_e2e/mock_upstream.py:/app/mock_upstream.py:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:18080/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+volumes:
+  qwen_tts_pg:
+  qwen_tts_logs:
