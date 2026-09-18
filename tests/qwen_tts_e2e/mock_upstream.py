@@ -1,6 +1,9 @@
 import base64
 import io
 import json
+import os
+import pathlib
+import struct
 import threading
 import time
 import wave
@@ -15,6 +18,10 @@ with wave.open(buffer, 'wb') as audio:
     audio.setframerate(24000)
     audio.writeframes(PCM)
 WAV = buffer.getvalue()
+stream_wave = bytearray(WAV)
+struct.pack_into('<I', stream_wave, 4, 0x7fffffbf)
+struct.pack_into('<I', stream_wave, 40, 0x7fffff99)
+STREAM_WAV = bytes(stream_wave)
 records = []
 lock = threading.Lock()
 
@@ -118,9 +125,38 @@ class Handler(BaseHTTPRequestHandler):
         if '[invalid-base64]' in text:
             self.event({'output': {'audio': {'data': '%%%'}}})
             return
+        if '[recorded-wav]' in text:
+            recorded = pathlib.Path(os.environ['QWEN_TTS_RECORDED_SSE']).read_text()
+            events = [json.loads(line[5:]) for line in recorded.splitlines() if line.startswith('data:')]
+            chunks = [base64.b64decode(event['audio']) for event in events if event.get('type') == 'audio.delta']
+            recorded_usage = next(event['usage'] for event in events if event.get('type') == 'audio.done')
+            output['usage'] = {'input_tokens': 0, 'output_tokens': 0, 'characters': recorded_usage['characters']}
+        else:
+            audio = PCM if '[raw-pcm]' in text else STREAM_WAV
+            if '[wav-finite]' in text:
+                audio = WAV
+            if '[wav-metadata]' in text:
+                audio = STREAM_WAV[:12] + b'JUNK\x03\x00\x00\x00abc\x00' + STREAM_WAV[12:]
+            if '[extended-wav]' in text:
+                audio = bytearray(STREAM_WAV[:36] + b'\x00\x00' + STREAM_WAV[36:])
+                struct.pack_into('<I', audio, 16, 18)
+                audio = bytes(audio)
+            if '[bad-wav]' in text:
+                audio = STREAM_WAV[:20] + b'\x03\x00' + STREAM_WAV[22:]
+            if '[huge-wav-header]' in text:
+                audio = STREAM_WAV[:16] + b'\xff\xff\xff\xff' + STREAM_WAV[20:]
+            if '[truncated-wav-header]' in text:
+                audio = STREAM_WAV[:30]
+            if '[wav-header-only]' in text:
+                audio = STREAM_WAV[:44]
+            if '[split-wav]' in text:
+                cuts = [0, 3, 9, 21, 43, 300, len(audio)]
+                chunks = [audio[start:end] for start, end in zip(cuts, cuts[1:])]
+            else:
+                chunks = [audio[:len(audio) // 2], audio[len(audio) // 2:]]
         if '[empty-audio]' not in text:
-            for start in (0, len(PCM) // 2):
-                self.event({'output': {'audio': {'data': base64.b64encode(PCM[start:start + len(PCM) // 2]).decode()}}})
+            for chunk in chunks:
+                self.event({'output': {'audio': {'data': base64.b64encode(chunk).decode()}}})
                 if '[delayed]' in text:
                     time.sleep(0.3)
         if '[truncated]' not in text:

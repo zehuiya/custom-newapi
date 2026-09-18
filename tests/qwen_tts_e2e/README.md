@@ -1,5 +1,7 @@
 # Qwen3 TTS E2E
 
+Verification reports: [initial adapter](REPORT.md), [PCM header fix](PCM_FIX_REPORT.md).
+
 This suite starts the complete NewAPI application with PostgreSQL, Redis and a
 Python DashScope mock. It uses the admin API to create channels and pricing,
 calls `/v1/audio/speech`, and checks both returned audio and consumption logs.
@@ -68,6 +70,10 @@ Example request:
 Non-stream mode defaults to WAV, which is downloaded from the upstream audio
 URL and returned as binary `audio/wav`. Non-stream `response_format: "pcm"`
 requests upstream SSE and concatenates decoded audio into binary `audio/pcm`.
+SSE audio can be WAV-wrapped: the adapter removes its RIFF/WAV header before
+returning PCM in either mode. Raw PCM passes through unchanged. WAV headers can
+span multiple chunks and include metadata, and streaming placeholder sizes are
+supported. No transcoding or change to usage/billing is performed.
 
 For downstream SSE, add `"stream_format": "sse"` and use
 `"response_format": "pcm"` (or omit the format). The response has `audio.delta`
@@ -87,6 +93,13 @@ tokens remain zero. Missing character usage falls back to Unicode character
 count; explicit zero is preserved, and negative usage is rejected. Pricing
 ratio, group multiplier, per-call and expression pricing all reuse the existing
 billing path. For ratio pricing, `ModelRatio = price_in_USD_per_1M_characters / 2`.
+
+The mock defaults to WAV-wrapped SSE with the real channel's placeholder sizes.
+The suite additionally covers raw PCM, finite sizes, fragmented/extended WAV
+headers, metadata, malformed headers and concurrent mixing of both formats.
+An optional `--recorded-sse PATH` replays saved real-channel audio through the
+mock. Mount that file read-only into the mock and set its
+`QWEN_TTS_RECORDED_SSE` environment variable to the container path first.
 
 References:
 

@@ -28,7 +28,7 @@ MODELS = ['qwen3-tts-flash', 'qwen3-tts-flash-2025-11-27', 'e2e-tts-alias', 'e2e
 
 
 class E2E:
-    def __init__(self, base_url, mock_url, output):
+    def __init__(self, base_url, mock_url, output, recorded_sse=None):
         self.base_url = base_url.rstrip('/')
         self.mock_url = mock_url.rstrip('/')
         self.output = pathlib.Path(output)
@@ -37,6 +37,7 @@ class E2E:
         self.token = ''
         self.results = []
         self.counter = 0
+        self.recorded_sse = recorded_sse
 
     def request(self, method, path, body=None, headers=None, admin=False, timeout=30):
         headers = dict(headers or {})
@@ -161,7 +162,7 @@ class E2E:
         return [json.loads(line[5:]) for line in raw.decode().splitlines()
                 if line.startswith('data:') and line[5:].strip().startswith('{')]
 
-    def audio_case(self, name, marker='', model='qwen3-tts-flash', stream=False, pcm=False, count=37, quota=None, **kwargs):
+    def audio_case(self, name, marker='', model='qwen3-tts-flash', stream=False, pcm=False, count=37, quota=None, expected_pcm=PCM, **kwargs):
         body = self.payload(marker, model=model, **kwargs)
         if stream:
             body.update(stream_format='sse', response_format='pcm')
@@ -173,11 +174,11 @@ class E2E:
             assert headers['Content-Type'].startswith('text/event-stream'), headers
             events = self.events(raw)
             audio = b''.join(base64.b64decode(event['audio']) for event in events if event.get('type') == 'audio.delta')
-            assert audio == PCM, 'audio data changed'
+            assert audio == expected_pcm, 'audio data changed or WAV header not removed'
             assert events[-1]['type'] == 'audio.done', events
             assert events[-1]['usage']['characters'] == (len(body['input']) if count is None else count), events[-1]
         else:
-            assert raw == (PCM if pcm else WAV), (len(raw), hashlib.sha256(raw).hexdigest())
+            assert raw == (expected_pcm if pcm else WAV), (len(raw), hashlib.sha256(raw).hexdigest())
             assert headers['Content-Type'].startswith('audio/pcm' if pcm else 'audio/wav'), headers
         record = next(item for item in reversed(self.records())
                       if isinstance(item.get('body', {}).get('input'), dict)
@@ -216,7 +217,8 @@ class E2E:
 
     def concurrency(self):
         before = self.api('GET', f'/api/token/{self.token_id}')['used_quota']
-        bodies = [self.payload(f'[concurrent-{i}]', response_format='pcm', stream_format='sse' if i % 2 else '') for i in range(20)]
+        bodies = [self.payload(f'[concurrent-{i}]' + ('[raw-pcm]' if i % 4 < 2 else '[split-wav]'),
+                               response_format='pcm', stream_format='sse' if i % 2 else '') for i in range(20)]
         with concurrent.futures.ThreadPoolExecutor(max_workers=20) as pool:
             outcomes = list(pool.map(lambda body: self.request('POST', '/v1/audio/speech', body, {'Authorization': 'Bearer ' + self.token}), bodies))
         ids = []
@@ -278,6 +280,23 @@ class E2E:
             ])
             for marker in ('[body-error]', '[malformed]', '[negative-usage]', '[empty-audio]'):
                 cases.append((f'{marker} stream={stream}', lambda m=marker, s=stream: self.error_case(m, stream=s)))
+            for marker in ('[raw-pcm]', '[wav-finite]', '[split-wav]', '[wav-metadata]', '[extended-wav]'):
+                cases.append((f'PCM normalization {marker} stream={stream}',
+                              lambda m=marker, s=stream: self.audio_case('', m, stream=s, pcm=True)))
+            for marker in ('[bad-wav]', '[huge-wav-header]', '[truncated-wav-header]', '[wav-header-only]'):
+                cases.append((f'invalid WAV {marker} stream={stream}',
+                              lambda m=marker, s=stream: self.error_case(m, stream=s, response_format='pcm')))
+        if self.recorded_sse:
+            source_events = self.events(pathlib.Path(self.recorded_sse).read_bytes())
+            source_wave = b''.join(base64.b64decode(event['audio']) for event in source_events if event.get('type') == 'audio.delta')
+            with wave.open(io.BytesIO(source_wave), 'rb') as reader:
+                source_pcm = reader.readframes(reader.getnframes())
+            assert source_wave[:4] == b'RIFF' and len(source_pcm) > 0
+            source_characters = next(event['usage']['characters'] for event in source_events if event.get('type') == 'audio.done')
+            for stream in (False, True):
+                cases.append((f'recorded real channel WAV stream={stream}',
+                              lambda s=stream: self.audio_case('', '[recorded-wav]', stream=s, pcm=True,
+                                                             expected_pcm=source_pcm, count=source_characters)))
         cases.extend([
             ('non-stream PCM aggregation', lambda: self.audio_case('', pcm=True)),
             ('language and speed=1', lambda: self.audio_case('', language_type='Chinese', speed=1)),
@@ -331,5 +350,6 @@ if __name__ == '__main__':
     parser.add_argument('--base-url', default='http://127.0.0.1:13009')
     parser.add_argument('--mock-url', default='http://127.0.0.1:18089')
     parser.add_argument('--output', default='.test/qwen-tts-e2e/results')
+    parser.add_argument('--recorded-sse', help='Optional saved SSE from the real channel; mount it in the mock and set QWEN_TTS_RECORDED_SSE')
     args = parser.parse_args()
-    raise SystemExit(bool(E2E(args.base_url, args.mock_url, args.output).run()))
+    raise SystemExit(bool(E2E(args.base_url, args.mock_url, args.output, args.recorded_sse).run()))

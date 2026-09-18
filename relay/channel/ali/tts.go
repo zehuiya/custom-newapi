@@ -79,7 +79,7 @@ func (a *Adaptor) convertTTSRequest(info *relaycommon.RelayInfo, request dto.Aud
 	} else if request.ResponseFormat != "" && request.ResponseFormat != "wav" && request.ResponseFormat != "pcm" {
 		return invalid("Qwen TTS supports response_format wav or pcm only")
 	}
-	// DashScope returns PCM in SSE chunks and a WAV URL in non-stream mode.
+	// SSE audio can be raw PCM or WAV-wrapped; non-stream mode returns a WAV URL.
 	a.TTSSSE = info.IsStream || request.ResponseFormat == "pcm"
 	payload, err := common.Marshal(qwenTTSRequest{
 		Model: request.Model,
@@ -205,7 +205,24 @@ func handleTTSStream(c *gin.Context, resp *http.Response, info *relaycommon.Rela
 	var audio bytes.Buffer
 	var characters *int
 	var audioBytes int64
+	var receivedBytes int64
+	var pcmStream ttsPCMStream
 	finished := false
+	writePCM := func(pcm []byte, encoded string) error {
+		if len(pcm) == 0 {
+			return nil
+		}
+		audioBytes += int64(len(pcm))
+		if info.IsStream {
+			if encoded == "" {
+				encoded = base64.StdEncoding.EncodeToString(pcm)
+			}
+			helper.SetEventStreamHeaders(c)
+			return helper.ObjectData(c, map[string]any{"type": "audio.delta", "audio": encoded})
+		}
+		_, _ = audio.Write(pcm)
+		return nil
+	}
 	err := channel.ConsumeBufferedSSE(c, resp, info, func(data string) (bool, error) {
 		var response qwenTTSResponse
 		if err := common.UnmarshalJsonStr(data, &response); err != nil {
@@ -222,22 +239,31 @@ func handleTTSStream(c *gin.Context, resp *http.Response, info *relaycommon.Rela
 			if err != nil {
 				return false, fmt.Errorf("invalid Qwen TTS audio base64: %w", err)
 			}
-			audioBytes += int64(len(decoded))
-			if audioBytes > ttsMaxBytes() {
+			receivedBytes += int64(len(decoded))
+			if receivedBytes > ttsMaxBytes() {
 				return false, errors.New("Qwen TTS audio exceeds the file download size limit")
 			}
-			if info.IsStream {
-				helper.SetEventStreamHeaders(c)
-				if err := helper.ObjectData(c, map[string]any{"type": "audio.delta", "audio": encoded}); err != nil {
-					return false, err
-				}
-			} else {
-				_, _ = audio.Write(decoded)
+			pcm, err := pcmStream.push(decoded)
+			if err != nil {
+				return false, err
+			}
+			if len(pcm) != len(decoded) {
+				encoded = ""
+			}
+			if err := writePCM(pcm, encoded); err != nil {
+				return false, err
 			}
 		}
 		finished = response.Output.FinishReason == "stop"
 		return finished, nil
 	})
+	if err == nil && finished {
+		var tail []byte
+		tail, err = pcmStream.finish()
+		if err == nil {
+			err = writePCM(tail, "")
+		}
+	}
 	if err == nil && (!finished || audioBytes == 0) {
 		err = errors.New("Qwen TTS stream ended without complete audio")
 	}
