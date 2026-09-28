@@ -10,6 +10,8 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -78,4 +80,47 @@ func TestOaiStreamBufferHandlerRejectsPartialEOF(t *testing.T) {
 	_, newAPIError := OaiStreamBufferHandler(ctx, &relaycommon.RelayInfo{}, upstream)
 	require.NotNil(t, newAPIError)
 	require.Contains(t, newAPIError.Error(), "before a terminal event")
+}
+
+func TestOaiStreamBufferHandlerPreservesStructuredUpstreamError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	upstream := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body: io.NopCloser(strings.NewReader(
+			"data: {\"error\":{\"message\":\"Concurrency limit exceeded for account, please retry later\",\"type\":\"rate_limit_error\",\"param\":\"\",\"code\":\"concurrency_limit_exceeded\"}}\n\n",
+		)),
+	}
+
+	usage, newAPIError := OaiStreamBufferHandler(ctx, &relaycommon.RelayInfo{}, upstream)
+	require.Nil(t, usage)
+	require.NotNil(t, newAPIError)
+	require.Equal(t, http.StatusBadGateway, newAPIError.StatusCode)
+	require.Equal(t, types.ErrorTypeOpenAIError, newAPIError.GetErrorType())
+	require.Equal(t, types.ErrorCode("concurrency_limit_exceeded"), newAPIError.GetErrorCode())
+	require.Equal(t, "Concurrency limit exceeded for account, please retry later", newAPIError.Error())
+	require.False(t, types.IsSkipRetryError(newAPIError))
+	require.False(t, operation_setting.IsAlwaysSkipRetryCode(newAPIError.GetErrorCode()))
+	require.True(t, operation_setting.ShouldRetryByStatusCode(newAPIError.StatusCode))
+	require.False(t, ctx.Writer.Written())
+}
+
+func TestOaiStreamBufferHandlerKeepsMalformedChunkAsBadResponseBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	upstream := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader("data: not-json\n\n")),
+	}
+
+	usage, newAPIError := OaiStreamBufferHandler(ctx, &relaycommon.RelayInfo{}, upstream)
+	require.Nil(t, usage)
+	require.NotNil(t, newAPIError)
+	require.Equal(t, http.StatusBadGateway, newAPIError.StatusCode)
+	require.Equal(t, types.ErrorCodeBadResponseBody, newAPIError.GetErrorCode())
 }

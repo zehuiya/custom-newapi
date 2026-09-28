@@ -189,16 +189,21 @@ func (a *bufferedChatAccumulator) hasTerminalChoice() bool {
 // delegates to the existing non-stream handler for conversion and billing.
 func OaiStreamBufferHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	accumulator := newBufferedChatAccumulator()
+	var upstreamError *types.OpenAIError
 	err := relaychannel.ConsumeBufferedSSE(c, resp, info, func(data string) (bool, error) {
 		oaiErr, mergeErr := accumulator.merge(data)
 		if mergeErr != nil {
 			return false, mergeErr
 		}
 		if oaiErr != nil {
+			upstreamError = oaiErr
 			return false, fmt.Errorf("upstream stream error: %s", oaiErr.Message)
 		}
 		return false, nil
 	})
+	if upstreamError != nil {
+		return nil, types.WithOpenAIError(*upstreamError, http.StatusBadGateway)
+	}
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
 	}
