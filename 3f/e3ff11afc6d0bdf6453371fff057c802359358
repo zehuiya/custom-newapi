@@ -1,0 +1,22 @@
+relay/channel/openai/relay-stream-buffer.go
+  s_10d0b4cbf278c6::t_4321b875f66214 192,199,204-206
+relay/channel/openai/relay_stream_buffer_test.go
+  s_10d0b4cbf278c6::t_4321b875f66214 13-14,83-125
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.12",
+  "base_commit_sha": "3fe3ff11afc6d0bdf6453371fff057c802359358",
+  "prompts": {},
+  "logical_commit_id": "3fe3ff11afc6d0bdf6453371fff057c802359358",
+  "sessions": {
+    "s_10d0b4cbf278c6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019e9112-50c3-7ed0-8ba6-bfbe99f02c65",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "xieqingxing <xieqingxing@bigo.sg>"
+    }
+  }
+}
