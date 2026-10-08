@@ -1,0 +1,26 @@
+relay/channel/openai/relay_responses_stream_error_test.go
+  s_10d0b4cbf278c6::t_a396c9f1f42f44 26-31,92,103,116-121,123,128,130,160,184,204,244
+  s_10d0b4cbf278c6::t_c8b197a1e58633 1-25,32-91,93-102,104-115,122,124-127,129,131-159,161-183,185-203,205-213,239-243,245-249
+  s_10d0b4cbf278c6::t_fd4e14c3f1409d 214-238
+controller/relay_responses_retry_test.go
+  s_10d0b4cbf278c6::t_fd4e14c3f1409d 1-73
+relay/channel/openai/relay_responses.go
+  s_10d0b4cbf278c6::t_a396c9f1f42f44 29-67,73,79-83,85,95-97,190,193-197,257-274
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.12",
+  "base_commit_sha": "b838552384eee23479cc17b6cfab492996c12263",
+  "prompts": {},
+  "logical_commit_id": "b838552384eee23479cc17b6cfab492996c12263",
+  "sessions": {
+    "s_10d0b4cbf278c6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019e9112-50c3-7ed0-8ba6-bfbe99f02c65",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "xieqingxing <xieqingxing@bigo.sg>"
+    }
+  }
+}
