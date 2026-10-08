@@ -24,7 +24,45 @@ import (
 type bufferedResponsesEvent struct {
 	Type     string          `json:"type"`
 	Response json.RawMessage `json:"response,omitempty"`
-	Error    any             `json:"error,omitempty"`
+}
+
+func responsesStreamError(data string) *types.NewAPIError {
+	eventType := gjson.Get(data, "type").String()
+	errorData := gjson.Get(data, "error")
+	if !errorData.Exists() || errorData.Type == gjson.Null {
+		errorData = gjson.Get(data, "response.error")
+	}
+	if !errorData.Exists() || errorData.Type == gjson.Null {
+		switch eventType {
+		case "error":
+			// Responses errors may put code/message directly on the event.
+			errorData = gjson.Parse(data)
+		case "response.failed":
+			return types.WithOpenAIError(types.OpenAIError{Message: "upstream response failed"}, http.StatusBadGateway)
+		default:
+			return nil
+		}
+	}
+
+	var errorValue any
+	if err := common.Unmarshal([]byte(errorData.Raw), &errorValue); err != nil {
+		return types.NewOpenAIError(fmt.Errorf("invalid upstream responses stream error: %w", err), types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+	}
+	oaiError := dto.GetOpenAIError(errorValue)
+	if oaiError == nil {
+		return types.NewOpenAIError(fmt.Errorf("invalid upstream responses stream error"), types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+	}
+	if oaiError.Message == "" {
+		oaiError.Message = "upstream stream error"
+	}
+	if eventType == "error" && oaiError.Type == "error" {
+		oaiError.Type = "upstream_error"
+	}
+	statusCode := http.StatusBadGateway
+	if oaiError.Type == "rate_limit_error" || oaiError.Code == "rate_limit_exceeded" || oaiError.Code == "concurrency_limit_exceeded" {
+		statusCode = http.StatusTooManyRequests
+	}
+	return types.WithOpenAIError(*oaiError, statusCode)
 }
 
 // BufferResponsesStream consumes a Responses SSE stream and returns the raw
@@ -32,27 +70,31 @@ type bufferedResponsesEvent struct {
 // extensions that are not represented by the local response DTO.
 func BufferResponsesStream(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*http.Response, *types.NewAPIError) {
 	var responseBody []byte
+	var upstreamStreamError *types.NewAPIError
 	err := relaychannel.ConsumeBufferedSSE(c, resp, info, func(data string) (bool, error) {
 		var event bufferedResponsesEvent
 		if err := common.UnmarshalJsonStr(data, &event); err != nil {
 			return false, err
 		}
+		if streamError := responsesStreamError(data); streamError != nil {
+			upstreamStreamError = streamError
+			info.StreamStatus.RecordError(streamError.Error())
+			return false, streamError
+		}
 		switch event.Type {
-		case "response.completed", "response.incomplete", "response.failed":
+		case "response.completed", "response.incomplete":
 			if len(event.Response) == 0 || string(event.Response) == "null" {
 				return false, fmt.Errorf("responses terminal event is missing response")
 			}
 			responseBody = append(responseBody[:0], event.Response...)
 			return true, nil
-		case "error":
-			if oaiErr := dto.GetOpenAIError(event.Error); oaiErr != nil {
-				return false, fmt.Errorf("upstream responses stream error: %s", oaiErr.Message)
-			}
-			return false, fmt.Errorf("upstream responses stream error")
 		default:
 			return false, nil
 		}
 	})
+	if upstreamStreamError != nil {
+		return nil, upstreamStreamError
+	}
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
 	}
@@ -145,8 +187,14 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	var usage = &dto.Usage{}
 	var responseTextBuilder strings.Builder
 	responseCreatedAt := responsesCreatedAtFallback(info)
+	var upstreamStreamError *types.NewAPIError
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+		if streamError := responsesStreamError(data); streamError != nil {
+			upstreamStreamError = streamError
+			sr.Stop(streamError)
+			return
+		}
 		patchedData, effectiveCreatedAt, err := ensureResponsesCreatedAt(common.StringToByteSlice(data), true, responseCreatedAt)
 		if err != nil {
 			logger.LogError(c, "failed to add responses created_at: "+err.Error())
@@ -206,6 +254,24 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			}
 		}
 	})
+	if upstreamStreamError != nil {
+		if c.Writer.Written() {
+			oaiError := upstreamStreamError.ToOpenAIError()
+			payload := gin.H{"type": "error", "code": oaiError.Code, "message": oaiError.Message, "param": oaiError.Param}
+			if encoded, err := common.Marshal(payload); err == nil {
+				if _, err := fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", encoded); err != nil {
+					logger.LogError(c, "failed to send upstream responses stream error: "+err.Error())
+				}
+				_ = helper.FlushWriter(c)
+			} else {
+				logger.LogError(c, "failed to marshal upstream responses stream error: "+err.Error())
+			}
+			types.ErrOptionWithSkipRetry()(upstreamStreamError)
+		} else {
+			c.Writer.Header().Del("Content-Type")
+		}
+		return nil, upstreamStreamError
+	}
 
 	if usage.CompletionTokens == 0 {
 		// 计算输出文本的 token 数量
