@@ -5,19 +5,75 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
 
-func TestRetryParamBuildsIndependentResponsesAndTokenConstraints(t *testing.T) {
-	retryParam := &RetryParam{RequireResponses: true}
-	constraint := retryParam.GetSelectionConstraint()
-	require.NotNil(t, constraint)
-	require.True(t, constraint.RequireResponses)
-	require.Nil(t, constraint.TokenLimit)
+func TestRetryParamBuildsIndependentEndpointAndTokenConstraints(t *testing.T) {
+	require.Nil(t, (*RetryParam)(nil).GetSelectionConstraint())
+	for _, path := range []string{"", "/v1/responses/compact", "/v1/completions", "/v1/embeddings", "/v1/realtime"} {
+		require.Nil(t, (&RetryParam{RequestPath: path}).GetSelectionConstraint(), path)
+	}
+	for _, path := range []string{"/v1/responses", "/v1/messages", "/v1/chat/completions", "/pg/chat/completions"} {
+		retryParam := &RetryParam{RequestPath: path}
+		constraint := retryParam.GetSelectionConstraint()
+		require.NotNil(t, constraint)
+		require.Equal(t, path, constraint.RequestPath)
+		require.Nil(t, constraint.TokenLimit)
 
-	retryParam.TokenLimit = &model.ChannelTokenLimit{InputTokens: 100, MaxTokens: 20}
-	constraint = retryParam.GetSelectionConstraint()
-	require.Equal(t, retryParam.TokenLimit, constraint.TokenLimit)
+		retryParam.TokenLimit = &model.ChannelTokenLimit{InputTokens: 100, MaxTokens: 20}
+		constraint = retryParam.GetSelectionConstraint()
+		require.Equal(t, retryParam.TokenLimit, constraint.TokenLimit)
+		require.Equal(t, path, constraint.RequestPath)
+	}
+}
+
+func TestEndpointConstraintsApplyToFallbackAndRetrySelection(t *testing.T) {
+	require.NoError(t, model.DB.AutoMigrate(&model.Ability{}))
+	disabled := `{"responses_enabled":false,"messages_enabled":false,"chat_completions_enabled":false}`
+	channels := []model.Channel{
+		{Id: 81001, Name: "endpoint-disabled", Key: "test-key", Group: "endpoint-fallback-test", Models: "endpoint-model", Status: common.ChannelStatusEnabled, Priority: common.GetPointer(int64(100)), Setting: &disabled},
+		{Id: 81002, Name: "legacy-enabled", Key: "test-key", Group: "endpoint-fallback-test", Models: "endpoint-model", Status: common.ChannelStatusEnabled, Priority: common.GetPointer(int64(50)), MaxOutputTokens: common.GetPointer(100)},
+	}
+	oldMemoryCacheEnabled := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = true
+	t.Cleanup(func() {
+		require.NoError(t, model.DB.Where("channel_id in ?", []int{81001, 81002}).Delete(&model.Ability{}).Error)
+		require.NoError(t, model.DB.Where("id in ?", []int{81001, 81002}).Delete(&model.Channel{}).Error)
+		model.InitChannelCache()
+		common.MemoryCacheEnabled = oldMemoryCacheEnabled
+	})
+	require.NoError(t, model.DB.Create(&channels).Error)
+	for i := range channels {
+		require.NoError(t, channels[i].AddAbilities(model.DB))
+	}
+	model.InitChannelCache()
+
+	for _, path := range []string{"/v1/responses", "/v1/messages", "/v1/chat/completions", "/pg/chat/completions"} {
+		t.Run(path, func(t *testing.T) {
+			param := &RetryParam{Ctx: &gin.Context{}, TokenGroup: "endpoint-fallback-test", ModelName: "endpoint-model", RequestPath: path}
+			param.ConfigureFallback(1, []int{81001, 81002}, "endpoint-fallback-test")
+			channel, err := CacheGetFallbackSatisfiedChannel(param, 81001)
+			require.ErrorContains(t, err, "does not satisfy request constraints")
+			require.Nil(t, channel)
+
+			channel, err = CacheGetFallbackSatisfiedChannel(param, 81002)
+			require.NoError(t, err)
+			require.Equal(t, 81002, channel.Id)
+
+			param.SetRetry(1)
+			channel, group, err := CacheGetRandomSatisfiedChannel(param)
+			require.NoError(t, err)
+			require.Equal(t, "endpoint-fallback-test", group)
+			require.NotNil(t, channel)
+			require.Equal(t, 81002, channel.Id, "retries preserve the original endpoint constraint")
+
+			param.TokenLimit = &model.ChannelTokenLimit{MaxTokens: 101}
+			channel, err = CacheGetFallbackSatisfiedChannel(param, 81002)
+			require.ErrorContains(t, err, "does not satisfy request constraints")
+			require.Nil(t, channel)
+		})
+	}
 }
 
 func TestRetryParamFallbackOrderThenOriginalRetry(t *testing.T) {

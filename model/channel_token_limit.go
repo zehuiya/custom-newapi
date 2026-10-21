@@ -1,13 +1,15 @@
 package model
 
+import "github.com/QuantumNous/new-api/dto"
+
 type ChannelTokenLimit struct {
 	InputTokens int
 	MaxTokens   int
 }
 
 type ChannelSelectionConstraint struct {
-	TokenLimit       *ChannelTokenLimit
-	RequireResponses bool
+	TokenLimit  *ChannelTokenLimit
+	RequestPath string
 }
 
 func (limit *ChannelTokenLimit) Satisfies(channel *Channel) bool {
@@ -36,7 +38,7 @@ func (constraint *ChannelSelectionConstraint) Satisfies(channel *Channel) bool {
 	if !constraint.TokenLimit.Satisfies(channel) {
 		return false
 	}
-	if constraint.RequireResponses && !channel.GetSetting().SupportsResponses() {
+	if dto.IsChannelEndpointPath(constraint.RequestPath) && !channel.GetSetting().SupportsRequestPath(constraint.RequestPath) {
 		return false
 	}
 	return true

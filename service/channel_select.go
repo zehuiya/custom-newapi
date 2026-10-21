@@ -19,7 +19,7 @@ type RetryParam struct {
 	ModelName           string
 	Retry               *int
 	TokenLimit          *model.ChannelTokenLimit
-	RequireResponses    bool
+	RequestPath         string
 	resetNextTry        bool
 	selectionConstraint model.ChannelSelectionConstraint
 
@@ -47,11 +47,11 @@ func (p *RetryParam) GetRetry() int {
 }
 
 func (p *RetryParam) GetSelectionConstraint() *model.ChannelSelectionConstraint {
-	if p == nil || p.TokenLimit == nil && !p.RequireResponses {
+	if p == nil || p.TokenLimit == nil && !dto.IsChannelEndpointPath(p.RequestPath) {
 		return nil
 	}
 	p.selectionConstraint.TokenLimit = p.TokenLimit
-	p.selectionConstraint.RequireResponses = p.RequireResponses
+	p.selectionConstraint.RequestPath = p.RequestPath
 	return &p.selectionConstraint
 }
 

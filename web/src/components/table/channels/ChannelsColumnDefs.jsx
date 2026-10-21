@@ -281,6 +281,12 @@ const isRequestPassThroughEnabled = (record) =>
 const isResponsesDisabled = (record) =>
   parseChannelSettings(record).responses_enabled === false;
 
+const isMessagesDisabled = (record) =>
+  parseChannelSettings(record).messages_enabled === false;
+
+const isChatCompletionsDisabled = (record) =>
+  parseChannelSettings(record).chat_completions_enabled === false;
+
 const getCacheUsageMeta = (record) => {
   const settings = parseChannelSettings(record);
   const noCacheEnabled = settings.no_cache_enabled === true;
@@ -382,6 +388,8 @@ export const getChannelsColumns = ({
       render: (text, record, index) => {
         const passThroughEnabled = isRequestPassThroughEnabled(record);
         const responsesDisabled = isResponsesDisabled(record);
+        const messagesDisabled = isMessagesDisabled(record);
+        const chatCompletionsDisabled = isChatCompletionsDisabled(record);
         const cacheUsageMeta = getCacheUsageMeta(record);
         const upstreamUpdateMeta = getUpstreamUpdateMeta(record);
         const pendingAddCount = upstreamUpdateMeta.pendingAddModels.length;
@@ -429,6 +437,8 @@ export const getChannelsColumns = ({
         if (
           !passThroughEnabled &&
           !responsesDisabled &&
+          !messagesDisabled &&
+          !chatCompletionsDisabled &&
           !showUpstreamUpdateTag &&
           !cacheUsageMeta.cacheEnabled &&
           !cacheUsageMeta.noCacheEnabled &&
@@ -501,6 +511,30 @@ export const getChannelsColumns = ({
               >
                 <Tag color='red' type='light' size='small' shape='circle'>
                   {t('不支持 Responses')}
+                </Tag>
+              </Tooltip>
+            )}
+            {messagesDisabled && (
+              <Tooltip
+                content={t(
+                  '/v1/messages 请求不会调度到该渠道；其他接口不受影响。',
+                )}
+                position='top'
+              >
+                <Tag color='red' type='light' size='small' shape='circle'>
+                  {t('不支持 Messages')}
+                </Tag>
+              </Tooltip>
+            )}
+            {chatCompletionsDisabled && (
+              <Tooltip
+                content={t(
+                  '/v1/chat/completions 请求不会调度到该渠道；其他接口不受影响。',
+                )}
+                position='top'
+              >
+                <Tag color='red' type='light' size='small' shape='circle'>
+                  {t('不支持 Chat Completions')}
                 </Tag>
               </Tooltip>
             )}

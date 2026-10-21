@@ -36,17 +36,19 @@ func TestChannelTokenLimitSatisfies(t *testing.T) {
 	require.False(t, limit.Satisfies(&Channel{MaxInputTokens: intPtr(99)}))
 }
 
-func TestChannelSelectionConstraintRequiresResponsesWithoutApplyingUnknownTokenLimits(t *testing.T) {
-	disabledSetting := `{"responses_enabled":false}`
+func TestChannelSelectionConstraintRequiresEndpointWithoutApplyingUnknownTokenLimits(t *testing.T) {
+	disabledSetting := `{"responses_enabled":false,"messages_enabled":false,"chat_completions_enabled":false}`
 	legacyChannel := &Channel{MinInputTokens: intPtr(100)}
 	disabledChannel := &Channel{Setting: &disabledSetting}
 
-	constraint := &ChannelSelectionConstraint{RequireResponses: true}
-	require.True(t, constraint.Satisfies(legacyChannel))
-	require.False(t, constraint.Satisfies(disabledChannel))
+	for _, path := range []string{"/v1/responses", "/v1/messages", "/v1/chat/completions", "/pg/chat/completions"} {
+		constraint := &ChannelSelectionConstraint{RequestPath: path}
+		require.True(t, constraint.Satisfies(legacyChannel), path)
+		require.False(t, constraint.Satisfies(disabledChannel), path)
 
-	constraint.TokenLimit = &ChannelTokenLimit{InputTokens: 10, MaxTokens: 10}
-	require.False(t, constraint.Satisfies(legacyChannel))
+		constraint.TokenLimit = &ChannelTokenLimit{InputTokens: 10, MaxTokens: 10}
+		require.False(t, constraint.Satisfies(legacyChannel), path)
+	}
 }
 
 func TestGetRandomSatisfiedChannelWithTokenLimitSkipsInvalidPriority(t *testing.T) {
@@ -133,7 +135,7 @@ func TestGetRandomSatisfiedChannelWithSelectionConstraintSkipsResponsesDisabledC
 	require.NoError(t, err)
 	require.Equal(t, 1, channel.Id, "other endpoints keep the original selection behavior")
 
-	channel, err = GetRandomSatisfiedChannelWithSelectionConstraint("default", "responses-model", 0, &ChannelSelectionConstraint{RequireResponses: true})
+	channel, err = GetRandomSatisfiedChannelWithSelectionConstraint("default", "responses-model", 0, &ChannelSelectionConstraint{RequestPath: "/v1/responses"})
 	require.NoError(t, err)
 	require.NotNil(t, channel)
 	require.Equal(t, 2, channel.Id)

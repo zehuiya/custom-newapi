@@ -16,6 +16,8 @@ type ChannelSettings struct {
 	CacheReductionPercentage *int   `json:"cache_reduction_percentage,omitempty"`
 	FallbackChannelIDs       []int  `json:"fallback_channel_ids,omitempty"`
 	ResponsesEnabled         *bool  `json:"responses_enabled,omitempty"`
+	MessagesEnabled          *bool  `json:"messages_enabled,omitempty"`
+	ChatCompletionsEnabled   *bool  `json:"chat_completions_enabled,omitempty"`
 }
 
 const (
@@ -55,6 +57,38 @@ func (s ChannelSettings) GetCacheReductionPercentage() int {
 // setting existed. Only an explicit false disables /v1/responses scheduling.
 func (s ChannelSettings) SupportsResponses() bool {
 	return s.ResponsesEnabled == nil || *s.ResponsesEnabled
+}
+
+func (s ChannelSettings) SupportsMessages() bool {
+	return s.MessagesEnabled == nil || *s.MessagesEnabled
+}
+
+func (s ChannelSettings) SupportsChatCompletions() bool {
+	return s.ChatCompletionsEnabled == nil || *s.ChatCompletionsEnabled
+}
+
+func IsChannelEndpointPath(path string) bool {
+	switch path {
+	case "/v1/responses", "/v1/messages", "/v1/chat/completions", "/pg/chat/completions":
+		return true
+	default:
+		return false
+	}
+}
+
+// SupportsRequestPath applies scheduling settings to the client request endpoint,
+// independently of any protocol conversion performed for the upstream provider.
+func (s ChannelSettings) SupportsRequestPath(path string) bool {
+	switch path {
+	case "/v1/responses":
+		return s.SupportsResponses()
+	case "/v1/messages":
+		return s.SupportsMessages()
+	case "/v1/chat/completions", "/pg/chat/completions":
+		return s.SupportsChatCompletions()
+	default:
+		return true
+	}
 }
 
 type VertexKeyType string

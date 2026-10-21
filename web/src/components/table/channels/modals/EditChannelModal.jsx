@@ -194,6 +194,16 @@ const CHANNEL_CHANGE_FIELDS = [
     label: '支持 /v1/responses',
     valueType: 'boolean',
   },
+  {
+    key: 'messages_enabled',
+    label: '支持 /v1/messages',
+    valueType: 'boolean',
+  },
+  {
+    key: 'chat_completions_enabled',
+    label: '支持 /v1/chat/completions',
+    valueType: 'boolean',
+  },
   { key: 'proxy', label: '代理地址', sensitive: true },
   { key: 'system_prompt', label: '系统提示词' },
   {
@@ -531,6 +541,8 @@ const EditChannelModal = (props) => {
     proxy: '',
     pass_through_body_enabled: false,
     responses_enabled: true,
+    messages_enabled: true,
+    chat_completions_enabled: true,
     system_prompt: '',
     system_prompt_override: false,
     cache_enabled: false,
@@ -1222,6 +1234,9 @@ const EditChannelModal = (props) => {
           data.pass_through_body_enabled =
             parsedSettings.pass_through_body_enabled || false;
           data.responses_enabled = parsedSettings.responses_enabled !== false;
+          data.messages_enabled = parsedSettings.messages_enabled !== false;
+          data.chat_completions_enabled =
+            parsedSettings.chat_completions_enabled !== false;
           data.system_prompt = parsedSettings.system_prompt || '';
           data.system_prompt_override =
             parsedSettings.system_prompt_override || false;
@@ -1262,6 +1277,8 @@ const EditChannelModal = (props) => {
           data.proxy = '';
           data.pass_through_body_enabled = false;
           data.responses_enabled = true;
+          data.messages_enabled = true;
+          data.chat_completions_enabled = true;
           data.system_prompt = '';
           data.system_prompt_override = false;
           data.cache_enabled = false;
@@ -1279,6 +1296,8 @@ const EditChannelModal = (props) => {
         data.proxy = '';
         data.pass_through_body_enabled = false;
         data.responses_enabled = true;
+        data.messages_enabled = true;
+        data.chat_completions_enabled = true;
         data.system_prompt = '';
         data.system_prompt_override = false;
         data.cache_enabled = false;
@@ -1439,6 +1458,8 @@ const EditChannelModal = (props) => {
         (data.system_prompt && data.system_prompt.trim()) ||
         data.pass_through_body_enabled ||
         data.responses_enabled === false ||
+        data.messages_enabled === false ||
+        data.chat_completions_enabled === false ||
         data.force_format ||
         data.force_stream ||
         data.cache_enabled ||
@@ -2293,6 +2314,8 @@ const EditChannelModal = (props) => {
       proxy: localInputs.proxy || '',
       pass_through_body_enabled: localInputs.pass_through_body_enabled || false,
       responses_enabled: localInputs.responses_enabled !== false,
+      messages_enabled: localInputs.messages_enabled !== false,
+      chat_completions_enabled: localInputs.chat_completions_enabled !== false,
       system_prompt: localInputs.system_prompt || '',
       system_prompt_override: localInputs.system_prompt_override || false,
       cache_enabled: localInputs.cache_enabled === true,
@@ -2397,6 +2420,8 @@ const EditChannelModal = (props) => {
     delete localInputs.proxy;
     delete localInputs.pass_through_body_enabled;
     delete localInputs.responses_enabled;
+    delete localInputs.messages_enabled;
+    delete localInputs.chat_completions_enabled;
     delete localInputs.system_prompt;
     delete localInputs.system_prompt_override;
     delete localInputs.cache_enabled;
@@ -3486,6 +3511,35 @@ const EditChannelModal = (props) => {
                     }
                     extraText={t(
                       '关闭后，/v1/responses 请求不会调度到此渠道；未配置时默认支持',
+                    )}
+                  />
+
+                  <Form.Switch
+                    field='messages_enabled'
+                    label={t('支持 /v1/messages')}
+                    checkedText={t('是')}
+                    uncheckedText={t('否')}
+                    onChange={(value) =>
+                      handleChannelSettingsChange('messages_enabled', value)
+                    }
+                    extraText={t(
+                      '关闭后，/v1/messages 请求不会调度到此渠道；未配置时默认支持',
+                    )}
+                  />
+
+                  <Form.Switch
+                    field='chat_completions_enabled'
+                    label={t('支持 /v1/chat/completions')}
+                    checkedText={t('是')}
+                    uncheckedText={t('否')}
+                    onChange={(value) =>
+                      handleChannelSettingsChange(
+                        'chat_completions_enabled',
+                        value,
+                      )
+                    }
+                    extraText={t(
+                      '关闭后，/v1/chat/completions 请求不会调度到此渠道；未配置时默认支持',
                     )}
                   />
 
