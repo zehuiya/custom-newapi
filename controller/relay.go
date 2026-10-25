@@ -417,8 +417,9 @@ func ensureSelectedChannelSatisfiesTokenLimit(c *gin.Context, info *relaycommon.
 		MaxTokens:   maxTokens,
 	}
 	constraint := &model.ChannelSelectionConstraint{
-		TokenLimit:  tokenLimit,
-		RequestPath: c.Request.URL.Path,
+		TokenLimit:      tokenLimit,
+		RequestPath:     c.Request.URL.Path,
+		ReasoningEffort: service.GetRequestReasoningEffort(c),
 	}
 	if constraint.Satisfies(channel) {
 		return nil

@@ -92,7 +92,7 @@ func resetDistributorEndpointTestChannels(t *testing.T, db *gorm.DB) {
 	require.NoError(t, db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&model.Channel{}).Error)
 }
 
-func requestDistributorEndpoint(path string, specificChannelID int) (*httptest.ResponseRecorder, int) {
+func requestDistributorEndpoint(path string, specificChannelID int, bodies ...string) (*httptest.ResponseRecorder, int) {
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
 		defer common.CleanupBodyStorage(c)
@@ -110,7 +110,11 @@ func requestDistributorEndpoint(path string, specificChannelID int) (*httptest.R
 		c.Status(http.StatusNoContent)
 	})
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"model":"`+distributorEndpointTestModel+`","messages":[]}`))
+	body := `{"model":"` + distributorEndpointTestModel + `","messages":[]}`
+	if len(bodies) > 0 {
+		body = bodies[0]
+	}
+	request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(recorder, request)
 	return recorder, selectedChannelID

@@ -1,23 +1,24 @@
 package dto
 
 type ChannelSettings struct {
-	ForceFormat              bool   `json:"force_format,omitempty"`
-	ForceStream              bool   `json:"force_stream,omitempty"`
-	Proxy                    string `json:"proxy"`
-	PassThroughBodyEnabled   bool   `json:"pass_through_body_enabled,omitempty"`
-	SystemPrompt             string `json:"system_prompt,omitempty"`
-	SystemPromptOverride     bool   `json:"system_prompt_override,omitempty"`
-	CacheEnabled             bool   `json:"cache_enabled,omitempty"`
-	CacheOverrideEnabled     bool   `json:"cache_override_enabled,omitempty"`
-	CachePercentageMin       *int   `json:"cache_percentage_min,omitempty"`
-	CachePercentageMax       *int   `json:"cache_percentage_max,omitempty"`
-	NoCacheEnabled           bool   `json:"no_cache_enabled,omitempty"`
-	CacheReductionEnabled    bool   `json:"cache_reduction_enabled,omitempty"`
-	CacheReductionPercentage *int   `json:"cache_reduction_percentage,omitempty"`
-	FallbackChannelIDs       []int  `json:"fallback_channel_ids,omitempty"`
-	ResponsesEnabled         *bool  `json:"responses_enabled,omitempty"`
-	MessagesEnabled          *bool  `json:"messages_enabled,omitempty"`
-	ChatCompletionsEnabled   *bool  `json:"chat_completions_enabled,omitempty"`
+	ForceFormat              bool                   `json:"force_format,omitempty"`
+	ForceStream              bool                   `json:"force_stream,omitempty"`
+	Proxy                    string                 `json:"proxy"`
+	PassThroughBodyEnabled   bool                   `json:"pass_through_body_enabled,omitempty"`
+	SystemPrompt             string                 `json:"system_prompt,omitempty"`
+	SystemPromptOverride     bool                   `json:"system_prompt_override,omitempty"`
+	CacheEnabled             bool                   `json:"cache_enabled,omitempty"`
+	CacheOverrideEnabled     bool                   `json:"cache_override_enabled,omitempty"`
+	CachePercentageMin       *int                   `json:"cache_percentage_min,omitempty"`
+	CachePercentageMax       *int                   `json:"cache_percentage_max,omitempty"`
+	NoCacheEnabled           bool                   `json:"no_cache_enabled,omitempty"`
+	CacheReductionEnabled    bool                   `json:"cache_reduction_enabled,omitempty"`
+	CacheReductionPercentage *int                   `json:"cache_reduction_percentage,omitempty"`
+	FallbackChannelIDs       []int                  `json:"fallback_channel_ids,omitempty"`
+	ResponsesEnabled         *bool                  `json:"responses_enabled,omitempty"`
+	MessagesEnabled          *bool                  `json:"messages_enabled,omitempty"`
+	ChatCompletionsEnabled   *bool                  `json:"chat_completions_enabled,omitempty"`
+	ReasoningEffortFilter    *ReasoningEffortFilter `json:"reasoning_effort_filter,omitempty"`
 }
 
 const (

@@ -82,6 +82,11 @@ import {
   normalizeFallbackChannelIds,
 } from './fallbackChannelUtils';
 import {
+  buildReasoningEffortFilter,
+  normalizeReasoningEfforts,
+  readReasoningEffortFilter,
+} from './reasoningEffortUtils';
+import {
   IconSave,
   IconClose,
   IconServer,
@@ -177,6 +182,21 @@ const CHANNEL_CHANGE_FIELDS = [
   { key: 'max_output_tokens', label: '最大输出', valueType: 'number' },
   { key: 'min_input_tokens', label: '最小输入', valueType: 'number' },
   { key: 'max_input_tokens', label: '最大输入', valueType: 'number' },
+  {
+    key: 'reasoning_effort_filter_enabled',
+    label: '推理强度调度限制',
+    valueType: 'boolean',
+  },
+  {
+    key: 'reasoning_effort_allowed_values',
+    label: '允许的推理等级',
+    valueType: 'array',
+  },
+  {
+    key: 'reasoning_effort_allow_missing',
+    label: '接受未传推理等级',
+    valueType: 'boolean',
+  },
   {
     key: 'fallback_channel_ids',
     label: '兜底渠道',
@@ -543,6 +563,9 @@ const EditChannelModal = (props) => {
     responses_enabled: true,
     messages_enabled: true,
     chat_completions_enabled: true,
+    reasoning_effort_filter_enabled: false,
+    reasoning_effort_allowed_values: [],
+    reasoning_effort_allow_missing: false,
     system_prompt: '',
     system_prompt_override: false,
     cache_enabled: false,
@@ -1225,6 +1248,7 @@ const EditChannelModal = (props) => {
         setMultiToSingle(false);
       }
       // 解析渠道额外设置并合并到data中
+      Object.assign(data, readReasoningEffortFilter(null));
       if (data.setting) {
         try {
           const parsedSettings = JSON.parse(data.setting);
@@ -1237,6 +1261,10 @@ const EditChannelModal = (props) => {
           data.messages_enabled = parsedSettings.messages_enabled !== false;
           data.chat_completions_enabled =
             parsedSettings.chat_completions_enabled !== false;
+          Object.assign(
+            data,
+            readReasoningEffortFilter(parsedSettings.reasoning_effort_filter),
+          );
           data.system_prompt = parsedSettings.system_prompt || '';
           data.system_prompt_override =
             parsedSettings.system_prompt_override || false;
@@ -1460,6 +1488,7 @@ const EditChannelModal = (props) => {
         data.responses_enabled === false ||
         data.messages_enabled === false ||
         data.chat_completions_enabled === false ||
+        data.reasoning_effort_filter_enabled ||
         data.force_format ||
         data.force_stream ||
         data.cache_enabled ||
@@ -2030,6 +2059,24 @@ const EditChannelModal = (props) => {
     const formValues = formApiRef.current ? formApiRef.current.getValues() : {};
     let localInputs = { ...formValues };
     localInputs.param_override = inputs.param_override;
+    localInputs.reasoning_effort_filter_enabled =
+      (localInputs.reasoning_effort_filter_enabled ??
+        inputs.reasoning_effort_filter_enabled) === true;
+    localInputs.reasoning_effort_allowed_values = normalizeReasoningEfforts(
+      localInputs.reasoning_effort_allowed_values ??
+        inputs.reasoning_effort_allowed_values,
+    );
+    localInputs.reasoning_effort_allow_missing =
+      (localInputs.reasoning_effort_allow_missing ??
+        inputs.reasoning_effort_allow_missing) === true;
+    if (
+      localInputs.reasoning_effort_filter_enabled &&
+      localInputs.reasoning_effort_allowed_values.length === 0 &&
+      !localInputs.reasoning_effort_allow_missing
+    ) {
+      showError(t('请至少输入一个推理等级，或开启接受未传推理等级'));
+      return;
+    }
 
     localInputs.cache_enabled =
       (localInputs.cache_enabled ?? inputs.cache_enabled) === true;
@@ -2316,6 +2363,7 @@ const EditChannelModal = (props) => {
       responses_enabled: localInputs.responses_enabled !== false,
       messages_enabled: localInputs.messages_enabled !== false,
       chat_completions_enabled: localInputs.chat_completions_enabled !== false,
+      reasoning_effort_filter: buildReasoningEffortFilter(localInputs),
       system_prompt: localInputs.system_prompt || '',
       system_prompt_override: localInputs.system_prompt_override || false,
       cache_enabled: localInputs.cache_enabled === true,
@@ -2422,6 +2470,9 @@ const EditChannelModal = (props) => {
     delete localInputs.responses_enabled;
     delete localInputs.messages_enabled;
     delete localInputs.chat_completions_enabled;
+    delete localInputs.reasoning_effort_filter_enabled;
+    delete localInputs.reasoning_effort_allowed_values;
+    delete localInputs.reasoning_effort_allow_missing;
     delete localInputs.system_prompt;
     delete localInputs.system_prompt_override;
     delete localInputs.cache_enabled;
@@ -3500,6 +3551,62 @@ const EditChannelModal = (props) => {
                       '请求 input_tokens 大于该值时跳过此渠道，0 表示不限制',
                     )}
                   />
+
+                  <Form.Switch
+                    field='reasoning_effort_filter_enabled'
+                    label={t('推理强度调度限制')}
+                    checkedText={t('开')}
+                    uncheckedText={t('关')}
+                    onChange={(value) =>
+                      handleChannelSettingsChange(
+                        'reasoning_effort_filter_enabled',
+                        value,
+                      )
+                    }
+                    extraText={t(
+                      '默认不限制；开启后，仅符合允许等级或未传规则的请求可调度到此渠道。无匹配渠道时按模型不可用报错。',
+                    )}
+                  />
+                  {inputs.reasoning_effort_filter_enabled && (
+                    <>
+                      <Form.TagInput
+                        field='reasoning_effort_allowed_values'
+                        keepState
+                        label={t('允许的推理等级')}
+                        placeholder={t('输入等级后按回车添加，例如 high、max')}
+                        addOnBlur
+                        allowDuplicates={false}
+                        separator={[',', '，']}
+                        showClear
+                        style={{ width: '100%' }}
+                        onChange={(values) =>
+                          handleChannelSettingsChange(
+                            'reasoning_effort_allowed_values',
+                            normalizeReasoningEfforts(values),
+                          )
+                        }
+                        extraText={t(
+                          '支持任意自定义等级，可添加多个，精确匹配并区分大小写；none 是显式等级，与未传不同。',
+                        )}
+                      />
+                      <Form.Switch
+                        field='reasoning_effort_allow_missing'
+                        keepState
+                        label={t('接受未传推理等级')}
+                        checkedText={t('是')}
+                        uncheckedText={t('否')}
+                        onChange={(value) =>
+                          handleChannelSettingsChange(
+                            'reasoning_effort_allow_missing',
+                            value,
+                          )
+                        }
+                        extraText={t(
+                          '读取客户端原始参数：Chat Completions 的 reasoning_effort、Responses 的 reasoning.effort、Messages 的 output_config.effort；不修改请求参数。',
+                        )}
+                      />
+                    </>
+                  )}
 
                   <Form.Switch
                     field='responses_enabled'

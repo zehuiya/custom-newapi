@@ -1350,6 +1350,9 @@ func (channel *Channel) ValidateSettings() error {
 		if err := common.Unmarshal(settingBytes, channelParams); err != nil {
 			return err
 		}
+		if err := channelParams.ReasoningEffortFilter.Validate(); err != nil {
+			return err
+		}
 		cacheModeCount := 0
 		if channelParams.CacheEnabled {
 			cacheModeCount++

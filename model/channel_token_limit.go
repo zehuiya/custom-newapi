@@ -8,8 +8,9 @@ type ChannelTokenLimit struct {
 }
 
 type ChannelSelectionConstraint struct {
-	TokenLimit  *ChannelTokenLimit
-	RequestPath string
+	TokenLimit      *ChannelTokenLimit
+	RequestPath     string
+	ReasoningEffort *dto.RequestReasoningEffort
 }
 
 func (limit *ChannelTokenLimit) Satisfies(channel *Channel) bool {
@@ -38,8 +39,11 @@ func (constraint *ChannelSelectionConstraint) Satisfies(channel *Channel) bool {
 	if !constraint.TokenLimit.Satisfies(channel) {
 		return false
 	}
-	if dto.IsChannelEndpointPath(constraint.RequestPath) && !channel.GetSetting().SupportsRequestPath(constraint.RequestPath) {
-		return false
+	if dto.IsChannelEndpointPath(constraint.RequestPath) {
+		settings := channel.GetSetting()
+		if !settings.SupportsRequestPath(constraint.RequestPath) || !settings.ReasoningEffortFilter.Matches(constraint.ReasoningEffort) {
+			return false
+		}
 	}
 	return true
 }

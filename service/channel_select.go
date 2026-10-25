@@ -52,6 +52,7 @@ func (p *RetryParam) GetSelectionConstraint() *model.ChannelSelectionConstraint 
 	}
 	p.selectionConstraint.TokenLimit = p.TokenLimit
 	p.selectionConstraint.RequestPath = p.RequestPath
+	p.selectionConstraint.ReasoningEffort = GetRequestReasoningEffort(p.Ctx)
 	return &p.selectionConstraint
 }
 

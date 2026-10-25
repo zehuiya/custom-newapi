@@ -37,6 +37,11 @@ func Distribute() func(c *gin.Context) {
 			return
 		}
 		requestPath := c.Request.URL.Path
+		if err := service.CaptureRequestReasoningEffort(c); err != nil {
+			abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": err.Error()}))
+			return
+		}
+		constraint := &model.ChannelSelectionConstraint{RequestPath: requestPath, ReasoningEffort: service.GetRequestReasoningEffort(c)}
 		if ok {
 			id, err := strconv.Atoi(channelId.(string))
 			if err != nil {
@@ -52,7 +57,7 @@ func Distribute() func(c *gin.Context) {
 				abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorChannelDisabled))
 				return
 			}
-			if !channel.GetSetting().SupportsRequestPath(requestPath) {
+			if !constraint.Satisfies(channel) {
 				abortWithOpenAiMessage(c, http.StatusServiceUnavailable, i18n.T(c, i18n.MsgDistributorNoAvailableChannel, map[string]any{"Group": common.GetContextKeyString(c, constant.ContextKeyUsingGroup), "Model": modelRequest.Model}), types.ErrorCodeModelNotFound)
 				return
 			}
@@ -106,7 +111,7 @@ func Distribute() func(c *gin.Context) {
 
 				if preferredChannelID, found := service.GetPreferredChannelByAffinity(c, modelRequest.Model, usingGroup); found {
 					preferred, err := model.CacheGetChannel(preferredChannelID)
-					if err == nil && preferred != nil && preferred.GetSetting().SupportsRequestPath(requestPath) {
+					if err == nil && preferred != nil && constraint.Satisfies(preferred) {
 						if preferred.Status != common.ChannelStatusEnabled {
 							if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
 								abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorChannelDisabled))
