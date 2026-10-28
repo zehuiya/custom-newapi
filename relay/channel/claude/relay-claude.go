@@ -588,6 +588,8 @@ type ClaudeResponseInfo struct {
 	OutputText    strings.Builder
 	Usage         *dto.Usage
 	Done          bool
+
+	thinkingSignatureStream thinkingSignatureStreamState
 }
 
 func collectClaudeResponseTextAndReasoning(claudeResponse *dto.ClaudeResponse) (string, string, string) {
@@ -982,6 +984,12 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		maybeMarkClaudeRefusal(c, *claudeResponse.Delta.StopReason)
 	}
 	if info.RelayFormat == types.RelayFormatClaude {
+		if shouldFillClaudeThinkingSignature(info) {
+			data, err = ensureClaudeStreamResponseID(data, &claudeResponse)
+			if err != nil {
+				return types.NewError(err, types.ErrorCodeBadResponseBody)
+			}
+		}
 		FormatClaudeResponseInfo(&claudeResponse, nil, claudeInfo)
 
 		if claudeResponse.Type == "message_start" {
@@ -1018,6 +1026,11 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 			// 解决 AWS Bedrock 等上游返回的 message_delta 缺少这些字段的问题
 			if !shouldSkipClaudeMessageDeltaUsagePatch(info) {
 				data = patchClaudeMessageDeltaUsageData(data, buildMessageDeltaPatchUsage(&claudeResponse, claudeInfo))
+			}
+		}
+		if shouldFillClaudeThinkingSignature(info) {
+			if err := claudeInfo.thinkingSignatureStream.writeMissingSignature(c, &claudeResponse); err != nil {
+				return types.NewError(err, types.ErrorCodeJsonMarshalFailed)
 			}
 		}
 		helper.ClaudeChunkData(c, claudeResponse, data)
@@ -1177,6 +1190,13 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 			}
 		} else {
 			responseData = data
+		}
+	}
+
+	if info.RelayFormat == types.RelayFormatClaude && shouldFillClaudeThinkingSignature(info) {
+		responseData, err = patchClaudeThinkingSignatures(responseData, &claudeResponse)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeBadResponseBody)
 		}
 	}
 
