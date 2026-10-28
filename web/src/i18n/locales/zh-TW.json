@@ -3779,6 +3779,8 @@
     "默认不限制；开启后，仅符合允许等级或未传规则的请求可调度到此渠道。无匹配渠道时按模型不可用报错。": "預設不限制；開啟後，僅符合允許等級或未傳規則的請求可調度到此渠道。無符合渠道時按模型不可用報錯。",
     "输入等级后按回车添加，例如 high、max": "輸入等級後按 Enter 新增，例如 high、max",
     "支持任意自定义等级，可添加多个，精确匹配并区分大小写；none 是显式等级，与未传不同。": "支援任意自訂等級，可新增多個，精確比對並區分大小寫；none 是明確指定的等級，與未傳不同。",
-    "读取客户端原始参数：Chat Completions 的 reasoning_effort、Responses 的 reasoning.effort、Messages 的 output_config.effort；不修改请求参数。": "讀取客戶端原始參數：Chat Completions 的 reasoning_effort、Responses 的 reasoning.effort、Messages 的 output_config.effort；不修改請求參數。"
+    "读取客户端原始参数：Chat Completions 的 reasoning_effort、Responses 的 reasoning.effort、Messages 的 output_config.effort；不修改请求参数。": "讀取客戶端原始參數：Chat Completions 的 reasoning_effort、Responses 的 reasoning.effort、Messages 的 output_config.effort；不修改請求參數。",
+    "返回请求模型名": "回傳請求模型名稱",
+    "将响应中的模型名统一为客户端请求的模型名，并隐藏日志中的模型重定向标识。默认关闭。": "將回應中的模型名稱統一為用戶端請求的模型名稱，並隱藏日誌中的模型重新導向標記。預設關閉。"
   }
 }

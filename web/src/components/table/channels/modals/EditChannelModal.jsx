@@ -205,6 +205,11 @@ const CHANNEL_CHANGE_FIELDS = [
   { key: 'force_format', label: '强制格式化', valueType: 'boolean' },
   { key: 'force_stream', label: '强制流式传输', valueType: 'boolean' },
   {
+    key: 'restore_response_model',
+    label: '返回请求模型名',
+    valueType: 'boolean',
+  },
+  {
     key: 'pass_through_body_enabled',
     label: '透传请求体',
     valueType: 'boolean',
@@ -558,6 +563,7 @@ const EditChannelModal = (props) => {
     // 渠道额外设置的默认值
     force_format: false,
     force_stream: false,
+    restore_response_model: false,
     proxy: '',
     pass_through_body_enabled: false,
     responses_enabled: true,
@@ -1254,6 +1260,8 @@ const EditChannelModal = (props) => {
           const parsedSettings = JSON.parse(data.setting);
           data.force_format = parsedSettings.force_format || false;
           data.force_stream = parsedSettings.force_stream === true;
+          data.restore_response_model =
+            parsedSettings.restore_response_model === true;
           data.proxy = parsedSettings.proxy || '';
           data.pass_through_body_enabled =
             parsedSettings.pass_through_body_enabled || false;
@@ -1302,6 +1310,7 @@ const EditChannelModal = (props) => {
           console.error('解析渠道设置失败:', error);
           data.force_format = false;
           data.force_stream = false;
+          data.restore_response_model = false;
           data.proxy = '';
           data.pass_through_body_enabled = false;
           data.responses_enabled = true;
@@ -1321,6 +1330,7 @@ const EditChannelModal = (props) => {
       } else {
         data.force_format = false;
         data.force_stream = false;
+        data.restore_response_model = false;
         data.proxy = '';
         data.pass_through_body_enabled = false;
         data.responses_enabled = true;
@@ -1491,6 +1501,7 @@ const EditChannelModal = (props) => {
         data.reasoning_effort_filter_enabled ||
         data.force_format ||
         data.force_stream ||
+        data.restore_response_model ||
         data.cache_enabled ||
         data.cache_override_enabled ||
         data.no_cache_enabled ||
@@ -2358,6 +2369,7 @@ const EditChannelModal = (props) => {
       ...existingChannelExtraSettings,
       force_format: localInputs.force_format || false,
       force_stream: localInputs.force_stream === true,
+      restore_response_model: localInputs.restore_response_model === true,
       proxy: localInputs.proxy || '',
       pass_through_body_enabled: localInputs.pass_through_body_enabled || false,
       responses_enabled: localInputs.responses_enabled !== false,
@@ -2465,6 +2477,7 @@ const EditChannelModal = (props) => {
     // 清理不需要发送到后端的字段
     delete localInputs.force_format;
     delete localInputs.force_stream;
+    delete localInputs.restore_response_model;
     delete localInputs.proxy;
     delete localInputs.pass_through_body_enabled;
     delete localInputs.responses_enabled;
@@ -4910,6 +4923,23 @@ const EditChannelModal = (props) => {
                           '键为请求中的模型名称，值为要替换的模型名称',
                         )}
                       />
+
+                      {/* Response Model Name - Core Config */}
+                      <Form.Checkbox
+                        field='restore_response_model'
+                        noLabel
+                        onChange={(event) =>
+                          handleChannelSettingsChange(
+                            'restore_response_model',
+                            event.target.checked,
+                          )
+                        }
+                        extraText={t(
+                          '将响应中的模型名统一为客户端请求的模型名，并隐藏日志中的模型重定向标识。默认关闭。',
+                        )}
+                      >
+                        {t('返回请求模型名')}
+                      </Form.Checkbox>
 
                       {/* Auto Ban - Core Config */}
                       <Form.Switch

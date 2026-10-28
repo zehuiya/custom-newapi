@@ -65,3 +65,19 @@ func TestChannelSettingsPreserveExplicitFalseOnMarshal(t *testing.T) {
 		require.NotContains(t, fields, key)
 	}
 }
+
+func TestChannelSettingsRestoreResponseModelDefaultsOff(t *testing.T) {
+	for _, raw := range []string{`{}`, `{"restore_response_model":false}`, `{"restore_response_model":null}`} {
+		var settings ChannelSettings
+		require.NoError(t, common.UnmarshalJsonStr(raw, &settings))
+		require.False(t, settings.RestoreResponseModel)
+	}
+	var settings ChannelSettings
+	require.NoError(t, common.UnmarshalJsonStr(`{"restore_response_model":true}`, &settings))
+	require.True(t, settings.RestoreResponseModel)
+	data, err := common.Marshal(settings)
+	require.NoError(t, err)
+	var roundTrip ChannelSettings
+	require.NoError(t, common.Unmarshal(data, &roundTrip))
+	require.True(t, roundTrip.RestoreResponseModel)
+}

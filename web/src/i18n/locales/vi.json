@@ -4320,6 +4320,8 @@
     "默认不限制；开启后，仅符合允许等级或未传规则的请求可调度到此渠道。无匹配渠道时按模型不可用报错。": "Mặc định không giới hạn. Khi bật, kênh chỉ nhận các mức được phép hoặc yêu cầu không truyền mức nếu được cho phép. Nếu không có kênh phù hợp, trả về lỗi mô hình không khả dụng.",
     "输入等级后按回车添加，例如 high、max": "Nhập mức rồi nhấn Enter để thêm, ví dụ high hoặc max",
     "支持任意自定义等级，可添加多个，精确匹配并区分大小写；none 是显式等级，与未传不同。": "Có thể thêm nhiều mức tùy chỉnh. So khớp chính xác, phân biệt chữ hoa và chữ thường. none là một mức được truyền rõ ràng, khác với không truyền.",
-    "读取客户端原始参数：Chat Completions 的 reasoning_effort、Responses 的 reasoning.effort、Messages 的 output_config.effort；不修改请求参数。": "Đọc tham số gốc của máy khách: reasoning_effort cho Chat Completions, reasoning.effort cho Responses và output_config.effort cho Messages. Không sửa tham số yêu cầu."
+    "读取客户端原始参数：Chat Completions 的 reasoning_effort、Responses 的 reasoning.effort、Messages 的 output_config.effort；不修改请求参数。": "Đọc tham số gốc của máy khách: reasoning_effort cho Chat Completions, reasoning.effort cho Responses và output_config.effort cho Messages. Không sửa tham số yêu cầu.",
+    "返回请求模型名": "Trả về tên mô hình được yêu cầu",
+    "将响应中的模型名统一为客户端请求的模型名，并隐藏日志中的模型重定向标识。默认关闭。": "Dùng tên mô hình mà máy khách yêu cầu trong phản hồi và ẩn dấu chuyển hướng mô hình trong nhật ký. Mặc định tắt."
   }
 }

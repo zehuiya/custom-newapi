@@ -27,6 +27,10 @@ func IOCopyBytesGracefully(c *gin.Context, src *http.Response, data []byte) {
 		return
 	}
 
+	if src == nil || src.StatusCode >= http.StatusOK && src.StatusCode < http.StatusMultipleChoices {
+		data = RestoreResponseModel(c, data)
+	}
+
 	body := io.NopCloser(bytes.NewBuffer(data))
 
 	// We shouldn't set the header before we parse the response body, because the parse part may fail.
