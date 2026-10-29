@@ -39,14 +39,37 @@ func TestRestoreResponseModelProtocolFields(t *testing.T) {
 		{"gemini", `{"modelVersion":"upstream-C","candidates":[],"extra":9007199254740993}`, "modelVersion"},
 		{"realtime session", `{"type":"session.created","session":{"id":"session-1","model":"upstream-C"},"extra":9007199254740993}`, "session.model"},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			c, _ := responseModelContext(true, "client-A")
-			out := RestoreResponseModel(c, []byte(tc.payload))
-			require.Equal(t, "client-A", gjson.GetBytes(out, tc.modelPath).String())
-			require.Equal(t, "9007199254740993", gjson.GetBytes(out, "extra").Raw)
-			require.Equal(t, tc.payload, string(outWithOriginalModel(t, out, tc.modelPath, gjson.Get(tc.payload, tc.modelPath).String())))
-		})
+		for _, model := range []struct{ request, response string }{
+			{"client-A", "client-A"},
+			{"anthropic:deepseek-flash", "deepseek-flash"},
+			{"provider:client-A:version", "client-A:version"},
+		} {
+			t.Run(tc.name+"/"+model.request, func(t *testing.T) {
+				c, _ := responseModelContext(true, model.request)
+				out := RestoreResponseModel(c, []byte(tc.payload))
+				require.Equal(t, model.response, gjson.GetBytes(out, tc.modelPath).String())
+				require.Equal(t, string(out), RestoreResponseModelString(c, tc.payload))
+				require.Equal(t, model.request, common.GetContextKeyString(c, constant.ContextKeyOriginalModel))
+				require.Equal(t, "9007199254740993", gjson.GetBytes(out, "extra").Raw)
+				require.Equal(t, tc.payload, string(outWithOriginalModel(t, out, tc.modelPath, gjson.Get(tc.payload, tc.modelPath).String())))
+			})
+		}
 	}
+}
+
+func TestRestoreResponseModelColonEdgeCases(t *testing.T) {
+	for _, tc := range []struct{ request, response string }{
+		{"", "upstream-C"},
+		{":deepseek-flash", "deepseek-flash"},
+		{"anthropic:", "anthropic:"},
+	} {
+		c, _ := responseModelContext(true, tc.request)
+		out := RestoreResponseModel(c, []byte(`{"model":"upstream-C"}`))
+		require.Equal(t, tc.response, gjson.GetBytes(out, "model").String())
+	}
+	c, _ := responseModelContext(false, "anthropic:deepseek-flash")
+	payload := `{"model":"upstream:deepseek-flash"}`
+	require.Equal(t, payload, RestoreResponseModelString(c, payload))
 }
 
 func outWithOriginalModel(t *testing.T, out []byte, path, model string) []byte {

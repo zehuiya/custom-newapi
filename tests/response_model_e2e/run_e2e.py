@@ -30,6 +30,14 @@ SPECS = {
 }
 
 
+def model_variants(alias):
+    return (
+        ("plain", alias),
+        ("prefixed", "anthropic:" + alias),
+        ("multiple_colons", "provider:" + alias + ":version"),
+    )
+
+
 def loopback_url(value):
     parsed = urllib.parse.urlsplit(value)
     assert parsed.scheme in ("http", "https"), "Only HTTP(S) loopback URLs are allowed"
@@ -194,10 +202,12 @@ class E2E:
         self.user_id = login["id"]
         assert not self.api("GET", "/api/channel/?p=1&page_size=100")["items"], "Refusing a database with unrelated channels"
         assert not self.api("GET", "/api/token/?p=1&size=100")["items"], "Refusing a database with unrelated tokens"
-        for key, value in [("RetryTimes", "0"), ("LogConsumeEnabled", "true"), ("ModelRatio", json.dumps({spec[2]: 0 for spec in SPECS.values()}))]:
+        model_ratios = {alias: 0 for spec in SPECS.values() for _, alias in model_variants(spec[2])}
+        for key, value in [("RetryTimes", "0"), ("LogConsumeEnabled", "true"), ("ModelRatio", json.dumps(model_ratios))]:
             self.api("PUT", "/api/option/", {"key": key, "value": value})
         for label, (channel_type, _, model) in SPECS.items():
-            channel = {"name": "response-model-e2e-" + label, "type": channel_type, "key": "loopback-mock-only", "status": 1, "weight": 1, "priority": 100, "base_url": self.mock_url + "/" + label, "models": model, "group": "default", "model_mapping": json.dumps({model: UPSTREAM_REQUEST_MODEL}), "setting": "{}", "settings": "{}", "other": "", "auto_ban": 0}
+            aliases = [alias for _, alias in model_variants(model)]
+            channel = {"name": "response-model-e2e-" + label, "type": channel_type, "key": "loopback-mock-only", "status": 1, "weight": 1, "priority": 100, "base_url": self.mock_url + "/" + label, "models": ",".join(aliases), "group": "default", "model_mapping": json.dumps({alias: UPSTREAM_REQUEST_MODEL for alias in aliases}), "setting": "{}", "settings": "{}", "other": "", "auto_ban": 0}
             self.api("POST", "/api/channel/", {"mode": "single", "channel": channel})
         page = self.api("GET", "/api/channel/?p=1&page_size=100")
         self.channels = {c["name"].removeprefix("response-model-e2e-"): c for c in page["items"]}
@@ -232,9 +242,11 @@ class E2E:
     def events(raw):
         return [json.loads(line[5:].strip()) for line in raw.decode().splitlines() if line.startswith("data:") and line[5:].strip() != "[DONE]"]
 
-    def check(self, label, enabled, stream=False, buffered=False, explicit=False):
+    def check(self, label, enabled, stream=False, buffered=False, explicit=False, model_case="plain", request_model=None):
         self.configure(label, enabled, buffered, explicit)
         _, path, alias = SPECS[label]
+        if request_model is not None:
+            alias = request_model
         payload = {"model": alias, "stream": stream}
         if label == "responses":
             payload["input"] = "hello"
@@ -250,7 +262,8 @@ class E2E:
         assert len(upstream) == 1 and upstream[0]["label"] == label, upstream
         assert upstream[0]["model"] == UPSTREAM_REQUEST_MODEL, upstream
         assert upstream[0]["stream"] is (stream or buffered), upstream
-        expected_model = alias if enabled else UPSTREAM_RESPONSE_MODEL
+        restored_model = alias.partition(":")[2] if ":" in alias else alias
+        expected_model = restored_model if enabled else UPSTREAM_RESPONSE_MODEL
         if stream:
             events = self.events(raw)
             if label == "chat":
@@ -292,7 +305,7 @@ class E2E:
             assert "is_model_mapped" not in other and "upstream_model_name" not in other, other
         else:
             assert other.get("is_model_mapped") is True and other.get("upstream_model_name"), other
-        result = {"protocol": label, "enabled": enabled, "stream": stream, "force_stream_buffer": buffered, "default_setting": not enabled and not explicit, "http": status, "upstream_received_model": UPSTREAM_REQUEST_MODEL, "client_response_model": expected_model, "redirect_marker_hidden": enabled, "content_preserved": True, "request_id": request_id}
+        result = {"protocol": label, "model_case": model_case, "client_request_model": alias, "enabled": enabled, "stream": stream, "force_stream_buffer": buffered, "default_setting": not enabled and not explicit, "http": status, "upstream_received_model": UPSTREAM_REQUEST_MODEL, "client_response_model": expected_model, "billing_log_model": log["model_name"], "redirect_marker_hidden": enabled, "content_preserved": True, "request_id": request_id}
         self.results.append(result)
         print(json.dumps(result, ensure_ascii=False), flush=True)
 
@@ -300,21 +313,23 @@ class E2E:
         self.prepare()
         try:
             for label in SPECS:
-                for enabled in (False, True):
-                    self.check(label, enabled)
-                    self.check(label, enabled, stream=True)
-                    self.check(label, enabled, buffered=True)
-                self.check(label, False, explicit=True)
+                for model_case, request_model in model_variants(SPECS[label][2]):
+                    arguments = {"model_case": model_case, "request_model": request_model}
+                    for enabled in (False, True):
+                        self.check(label, enabled, **arguments)
+                        self.check(label, enabled, stream=True, **arguments)
+                        self.check(label, enabled, buffered=True, **arguments)
+                    self.check(label, False, explicit=True, **arguments)
         finally:
             if self.token_id is not None:
                 self.api("DELETE", f"/api/token/{self.token_id}")
             for channel in self.channels.values():
                 self.api("DELETE", f"/api/channel/{channel['id']}")
-            report = {"base_url": self.base_url, "all_upstream_urls_loopback": True, "cases_passed": len(self.results), "expected_cases": 21, "temporary_tokens_and_channels_deleted": True, "results": self.results}
+            report = {"base_url": self.base_url, "all_upstream_urls_loopback": True, "cases_passed": len(self.results), "expected_cases": 63, "temporary_tokens_and_channels_deleted": True, "results": self.results}
             self.report.parent.mkdir(parents=True, exist_ok=True)
             self.report.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-        assert len(self.results) == 21
-        print(f"Passed all 21 response-model cases; report: {self.report}", flush=True)
+        assert len(self.results) == 63
+        print(f"Passed all 63 response-model cases; report: {self.report}", flush=True)
 
 
 def main():

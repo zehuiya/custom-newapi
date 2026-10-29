@@ -39,7 +39,11 @@ func restoredResponseModelName(c *gin.Context) string {
 	if !ok || !setting.RestoreResponseModel {
 		return ""
 	}
-	return common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
+	model := common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
+	if _, name, found := strings.Cut(model, ":"); found && name != "" {
+		return name
+	}
+	return model
 }
 
 func restoreResponseModel(data []byte, model string) []byte {
