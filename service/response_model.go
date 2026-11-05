@@ -47,6 +47,39 @@ func restoredResponseModelName(c *gin.Context) string {
 }
 
 func restoreResponseModel(data []byte, model string) []byte {
+	return rewriteResponseFields(data, model, "")
+}
+
+// RewriteRelayResponse changes only outgoing metadata. Upstream identifiers
+// used for accounting and stateful Responses requests are left intact.
+func RewriteRelayResponse(c *gin.Context, data []byte) []byte {
+	model, id := restoredResponseModelName(c), downstreamResponseID(c)
+	if model == "" && id == "" {
+		return data
+	}
+	return rewriteResponseFields(data, model, id)
+}
+
+func RewriteRelayResponseString(c *gin.Context, data string) string {
+	model, id := restoredResponseModelName(c), downstreamResponseID(c)
+	if model == "" && id == "" {
+		return data
+	}
+	return string(rewriteResponseFields([]byte(data), model, id))
+}
+
+func downstreamResponseID(c *gin.Context) string {
+	if c == nil || c.Request == nil || c.Request.URL == nil {
+		return ""
+	}
+	path := strings.TrimSuffix(c.Request.URL.Path, "/")
+	if !strings.HasSuffix(path, "/chat/completions") && !strings.HasSuffix(path, "/messages") {
+		return ""
+	}
+	return c.GetString(common.RequestIdKey)
+}
+
+func rewriteResponseFields(data []byte, model, id string) []byte {
 	if !gjson.ValidBytes(data) {
 		return data
 	}
@@ -69,7 +102,7 @@ func restoreResponseModel(data []byte, model string) []byte {
 	}
 	for _, path := range paths {
 		value := response.Get(path)
-		if value.Type != gjson.String || value.Str == model {
+		if model == "" || value.Type != gjson.String || value.Str == model {
 			continue
 		}
 		patched, err := sjson.SetBytes(data, path, model)
@@ -77,6 +110,23 @@ func restoreResponseModel(data []byte, model string) []byte {
 			return data
 		}
 		data = patched
+	}
+	if id != "" {
+		path := "id"
+		if response.Get("type").String() == "message_start" {
+			if !response.Get("message").IsObject() {
+				return data
+			}
+			path = "message.id"
+		} else if response.Get("id").Type != gjson.String &&
+			!response.Get("choices").IsArray() && response.Get("type").String() != "message" {
+			return data
+		}
+		if response.Get(path).String() != id {
+			if patched, err := sjson.SetBytes(data, path, id); err == nil {
+				data = patched
+			}
+		}
 	}
 	return data
 }

@@ -1,0 +1,52 @@
+services:
+  new-api:
+    image: ${RESPONSE_ID_IMAGE:-xieqingxing/new-api:20261106-request-id}
+    ports:
+      - "127.0.0.1:13009:3000"
+    environment:
+      SQL_DSN: postgres://idtest:idtest@postgres:5432/idtest?sslmode=disable
+      REDIS_CONN_STRING: redis://redis:6379
+      SESSION_SECRET: isolated-response-id-e2e-only
+      TZ: Asia/Shanghai
+      MEMORY_CACHE_ENABLED: "false"
+      SYNC_FREQUENCY: "1"
+      BATCH_UPDATE_ENABLED: "false"
+      ERROR_LOG_ENABLED: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:3000/api/status"]
+      interval: 2s
+      timeout: 3s
+      retries: 40
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: idtest
+      POSTGRES_PASSWORD: idtest
+      POSTGRES_DB: idtest
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U idtest -d idtest"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  tests:
+    image: python:3.12-alpine
+    network_mode: "service:new-api"
+    depends_on:
+      new-api:
+        condition: service_healthy
+    command: ["python", "/tests/response_id_e2e/run_e2e.py"]
+    volumes:
+      - ..:/tests:ro
+      - ../../outputs/response-id-e2e:/report

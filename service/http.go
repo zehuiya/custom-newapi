@@ -28,7 +28,7 @@ func IOCopyBytesGracefully(c *gin.Context, src *http.Response, data []byte) {
 	}
 
 	if src == nil || src.StatusCode >= http.StatusOK && src.StatusCode < http.StatusMultipleChoices {
-		data = RestoreResponseModel(c, data)
+		data = RewriteRelayResponse(c, data)
 	}
 
 	body := io.NopCloser(bytes.NewBuffer(data))
@@ -45,6 +45,9 @@ func IOCopyBytesGracefully(c *gin.Context, src *http.Response, data []byte) {
 			}
 			c.Writer.Header().Set(k, v[0])
 		}
+	}
+	if requestID := c.GetString(common.RequestIdKey); requestID != "" {
+		c.Writer.Header().Set(common.RequestIdKey, requestID)
 	}
 
 	// set Content-Length header manually BEFORE calling WriteHeader
