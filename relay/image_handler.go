@@ -99,14 +99,14 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 				httpResp.StatusCode = http.StatusOK
 			} else if info.ApiType == constant.APITypeRunware {
 				_, newAPIError = adaptor.DoResponse(c, httpResp, info)
-				service.ResetStatusCode(newAPIError, statusCodeMappingStr)
 				if newAPIError == nil {
-					return types.NewErrorWithStatusCode(
+					newAPIError = types.NewErrorWithStatusCode(
 						fmt.Errorf("runware upstream returned status code %d without error body", httpResp.StatusCode),
 						types.ErrorCodeBadResponseStatusCode,
 						httpResp.StatusCode,
 					)
 				}
+				service.ResetStatusCode(newAPIError, statusCodeMappingStr)
 				return newAPIError
 			} else {
 				newAPIError = service.RelayErrorHandler(c.Request.Context(), httpResp, false)

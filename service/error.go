@@ -132,15 +132,25 @@ func ResetStatusCode(newApiErr *types.NewAPIError, statusCodeMappingStr string) 
 	if newApiErr == nil {
 		return
 	}
+	// Normalize channel errors before applying the channel's status code mapping.
+	if newApiErr.StatusCode != http.StatusTooManyRequests {
+		newApiErr.StatusCode = http.StatusBadRequest
+		newApiErr.SetMessage("无效参数")
+		switch relayErr := newApiErr.RelayError.(type) {
+		case types.OpenAIError:
+			relayErr.Message = newApiErr.Error()
+			newApiErr.RelayError = relayErr
+		case types.ClaudeError:
+			relayErr.Message = newApiErr.Error()
+			newApiErr.RelayError = relayErr
+		}
+	}
 	if statusCodeMappingStr == "" || statusCodeMappingStr == "{}" {
 		return
 	}
 	statusCodeMapping := make(map[string]any)
 	err := common.Unmarshal([]byte(statusCodeMappingStr), &statusCodeMapping)
 	if err != nil {
-		return
-	}
-	if newApiErr.StatusCode == http.StatusOK {
 		return
 	}
 	codeStr := strconv.Itoa(newApiErr.StatusCode)
