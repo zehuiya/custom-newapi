@@ -1,0 +1,26 @@
+relay/image_handler.go
+  s_10d0b4cbf278c6::t_1add3712452083 103,109
+service/error_test.go
+  s_10d0b4cbf278c6::t_1add3712452083 4-8,43,46,48-105,115,119-164,167-191
+service/error.go
+  s_10d0b4cbf278c6::t_1add3712452083 135-147
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "8f004d29cdb47d0fda2e8fe57b6da991f7ff97f5",
+  "prompts": {},
+  "logical_commit_id": "8f004d29cdb47d0fda2e8fe57b6da991f7ff97f5",
+  "sessions": {
+    "s_10d0b4cbf278c6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019e9112-50c3-7ed0-8ba6-bfbe99f02c65",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "xieqingxing <xieqingxing@bigo.sg>",
+      "total_additions": 152,
+      "total_deletions": 7
+    }
+  }
+}
