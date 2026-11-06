@@ -12,6 +12,10 @@ services:
       SYNC_FREQUENCY: "1"
       BATCH_UPDATE_ENABLED: "false"
       ERROR_LOG_ENABLED: "true"
+      GLOBAL_API_RATE_LIMIT_ENABLE: "false"
+      GLOBAL_WEB_RATE_LIMIT_ENABLE: "false"
+      CRITICAL_RATE_LIMIT_ENABLE: "false"
+      SEARCH_RATE_LIMIT_ENABLE: "false"
     depends_on:
       postgres:
         condition: service_healthy
