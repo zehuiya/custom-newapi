@@ -14,6 +14,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/relaypayloadlog"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -143,6 +144,7 @@ func chatCompletionsViaResponses(c *gin.Context, info *relaycommon.RelayInfo, ad
 	statusCodeMappingStr := c.GetString("status_code_mapping")
 
 	httpResp = resp.(*http.Response)
+	relaypayloadlog.CaptureUpstreamResponse(c, info, httpResp)
 	if !info.ForceStreamBuffer {
 		info.IsStream = info.IsStream || strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream")
 	}

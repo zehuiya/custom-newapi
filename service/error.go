@@ -91,9 +91,6 @@ func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFai
 		return
 	}
 	CloseResponseBodyGracefully(resp)
-	if resp.StatusCode == http.StatusBadRequest {
-		logUpstreamBadRequest(ctx, resp.Header, responseBody)
-	}
 	var errResponse dto.GeneralErrorResponse
 	buildErrWithBody := func(message string) error {
 		if message == "" {

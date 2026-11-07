@@ -74,7 +74,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	var (
 		newAPIError      *types.NewAPIError
 		relayInfo        *relaycommon.RelayInfo
-		payloadLogFinish func(stream bool, errorInfo *relaypayloadlog.ErrorInfo) bool
+		payloadLogFinish func(*relaypayloadlog.ErrorInfo) bool
 		ws               *websocket.Conn
 	)
 
@@ -92,11 +92,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		if payloadLogFinish == nil {
 			return
 		}
-		stream := false
-		if relayInfo != nil {
-			stream = relayInfo.IsStream
-		}
-		payloadLogFinish(stream, relayPayloadLogErrorInfo(newAPIError))
+		payloadLogFinish(relayPayloadLogErrorInfo(newAPIError))
 	}()
 
 	defer func() {
@@ -337,7 +333,7 @@ func fastTokenCountMetaForPricing(request dto.Request) *types.TokenCountMeta {
 	return meta
 }
 
-func startRelayPayloadLogCapture(c *gin.Context, relayFormat types.RelayFormat, info *relaycommon.RelayInfo) func(bool, *relaypayloadlog.ErrorInfo) bool {
+func startRelayPayloadLogCapture(c *gin.Context, relayFormat types.RelayFormat, info *relaycommon.RelayInfo) func(*relaypayloadlog.ErrorInfo) bool {
 	if !relaypayloadlog.Enabled() || !shouldCaptureRelayPayload(relayFormat, info) {
 		return nil
 	}

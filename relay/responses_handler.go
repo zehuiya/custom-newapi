@@ -14,6 +14,7 @@ import (
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/relaypayloadlog"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/types"
 
@@ -125,6 +126,7 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 
 	if resp != nil {
 		httpResp = resp.(*http.Response)
+		relaypayloadlog.CaptureUpstreamResponse(c, info, httpResp)
 
 		if httpResp.StatusCode != http.StatusOK {
 			newAPIError = service.RelayErrorHandler(c.Request.Context(), httpResp, false)

@@ -40,21 +40,16 @@ type Config struct {
 	SampleRate      float64
 }
 
-type requestCapture struct {
-	Protocol string
-	Payload  any
-	RawBytes int
-	Meta     entryMeta
-}
-
 type capturedEntry struct {
 	Meta               entryMeta
 	Request            any
 	RequestRawBytes    int
 	Response           any
 	ResponseRawBytes   int
-	ResponseChunkCount int
 	ResponseTruncated  bool
+	UpstreamStatusCode int
+	UpstreamRequestID  string
+	UpstreamStream     bool
 	Error              *ErrorInfo
 }
 
@@ -98,13 +93,6 @@ type writerWorker struct {
 	filePath string
 	fileDate string
 	fileSize int64
-}
-
-type responseCaptureWriter struct {
-	gin.ResponseWriter
-	maxBytes  int64
-	buf       []byte
-	truncated bool
 }
 
 var (
@@ -183,137 +171,6 @@ func Shutdown(ctx context.Context) {
 
 func Enabled() bool {
 	return current() != nil
-}
-
-func AttachRequest(c *gin.Context, info *relaycommon.RelayInfo, protocol string, requestBody []byte) bool {
-	if current() == nil || c == nil || len(requestBody) == 0 {
-		return false
-	}
-	c.Set(requestContextKey, requestCapture{
-		Protocol: protocol,
-		Payload:  sanitizePayload(requestBody),
-		RawBytes: len(requestBody),
-		Meta:     buildMeta(c, info, protocol, false),
-	})
-	return true
-}
-
-func StartCapture(c *gin.Context, info *relaycommon.RelayInfo, protocol string, loadRequestBody func() ([]byte, error)) func(stream bool, errorInfo *ErrorInfo) bool {
-	m := current()
-	if m == nil || c == nil || loadRequestBody == nil {
-		return nil
-	}
-	if !m.shouldSample() {
-		return nil
-	}
-	requestBody, err := loadRequestBody()
-	if err != nil {
-		logger.LogWarn(c, "payload log request read skipped: "+err.Error())
-		return nil
-	}
-	if len(requestBody) == 0 || !AttachRequest(c, info, protocol, requestBody) {
-		return nil
-	}
-	writer := &responseCaptureWriter{
-		ResponseWriter: c.Writer,
-		maxBytes:       m.cfg.MaxEntryBytes,
-	}
-	c.Writer = writer
-	return func(stream bool, errorInfo *ErrorInfo) bool {
-		responseBody, truncated := writer.TakeBytes()
-		return SubmitResponse(c, info, protocol, stream, responseBody, errorInfo, truncated)
-	}
-}
-
-func SubmitResponse(c *gin.Context, info *relaycommon.RelayInfo, protocol string, stream bool, responseBody []byte, errorInfo *ErrorInfo, responseTruncated ...bool) bool {
-	m := current()
-	if m == nil || c == nil {
-		return false
-	}
-	capture, _ := c.Get(requestContextKey)
-	req, _ := capture.(requestCapture)
-	meta := buildMeta(c, info, protocol, stream)
-	if req.Meta.RequestID != "" {
-		meta.CreatedAt = req.Meta.CreatedAt
-		if meta.RequestID == "" {
-			meta.RequestID = req.Meta.RequestID
-		}
-		if meta.Path == "" {
-			meta.Path = req.Meta.Path
-		}
-		if meta.Method == "" {
-			meta.Method = req.Meta.Method
-		}
-		if meta.Model == "" {
-			meta.Model = req.Meta.Model
-		}
-		meta.Stream = stream
-	}
-	meta.Protocol = protocol
-	var response any
-	if stream {
-		response = sanitizeStreamBody(responseBody)
-	} else {
-		response = sanitizePayload(responseBody)
-	}
-	line, err := m.prepareLine(capturedEntry{
-		Meta:              meta,
-		Request:           req.Payload,
-		RequestRawBytes:   req.RawBytes,
-		Response:          response,
-		ResponseRawBytes:  len(responseBody),
-		ResponseTruncated: len(responseTruncated) > 0 && responseTruncated[0],
-		Error:             errorInfo,
-	})
-	if err != nil {
-		logger.LogError(c, "payload log prepare failed: "+err.Error())
-		return false
-	}
-	return m.submit(line)
-}
-
-func SubmitStreamResponse(c *gin.Context, info *relaycommon.RelayInfo, protocol string, chunks []string) bool {
-	m := current()
-	if m == nil || c == nil {
-		return false
-	}
-	capture, _ := c.Get(requestContextKey)
-	req, _ := capture.(requestCapture)
-	meta := buildMeta(c, info, protocol, true)
-	if req.Meta.RequestID != "" {
-		meta.CreatedAt = req.Meta.CreatedAt
-		if meta.RequestID == "" {
-			meta.RequestID = req.Meta.RequestID
-		}
-		if meta.Path == "" {
-			meta.Path = req.Meta.Path
-		}
-		if meta.Method == "" {
-			meta.Method = req.Meta.Method
-		}
-		if meta.Model == "" {
-			meta.Model = req.Meta.Model
-		}
-		meta.Stream = true
-	}
-	meta.Protocol = protocol
-	rawBytes := 0
-	for _, chunk := range chunks {
-		rawBytes += len(chunk)
-	}
-	line, err := m.prepareLine(capturedEntry{
-		Meta:               meta,
-		Request:            req.Payload,
-		RequestRawBytes:    req.RawBytes,
-		Response:           sanitizeStreamChunks(chunks),
-		ResponseRawBytes:   rawBytes,
-		ResponseChunkCount: len(chunks),
-	})
-	if err != nil {
-		logger.LogError(c, "payload log prepare failed: "+err.Error())
-		return false
-	}
-	return m.submit(line)
 }
 
 func normalizeConfig(cfg *Config) {
@@ -419,42 +276,6 @@ func getEnvFloatOrDefault(env string, defaultValue float64) float64 {
 	return parsed
 }
 
-func (w *responseCaptureWriter) Write(data []byte) (int, error) {
-	w.capture(data)
-	return w.ResponseWriter.Write(data)
-}
-
-func (w *responseCaptureWriter) WriteString(data string) (int, error) {
-	w.capture(common.StringToByteSlice(data))
-	return w.ResponseWriter.WriteString(data)
-}
-
-func (w *responseCaptureWriter) capture(data []byte) {
-	if w == nil || len(data) == 0 || w.truncated {
-		return
-	}
-	remaining := int(w.maxBytes) - len(w.buf)
-	if remaining <= 0 {
-		w.truncated = true
-		return
-	}
-	if len(data) > remaining {
-		w.buf = append(w.buf, data[:remaining]...)
-		w.truncated = true
-		return
-	}
-	w.buf = append(w.buf, data...)
-}
-
-func (w *responseCaptureWriter) TakeBytes() ([]byte, bool) {
-	if w == nil || len(w.buf) == 0 {
-		return nil, w != nil && w.truncated
-	}
-	data := w.buf
-	w.buf = nil
-	return data, w.truncated
-}
-
 func (m *manager) run() {
 	defer close(m.done)
 	m.cleanup()
@@ -522,6 +343,13 @@ func (m *manager) prepareLine(entry capturedEntry) ([]byte, error) {
 	if entry.Error != nil {
 		record["error"] = sanitizeErrorInfo(entry.Error)
 	}
+	if entry.UpstreamStatusCode != 0 {
+		record["upstream_status_code"] = entry.UpstreamStatusCode
+		record["upstream_stream"] = entry.UpstreamStream
+	}
+	if entry.UpstreamRequestID != "" {
+		record["upstream_request_id"] = entry.UpstreamRequestID
+	}
 	record["response"] = entry.Response
 	if entry.ResponseTruncated {
 		record["response_truncated"] = true
@@ -534,14 +362,19 @@ func (m *manager) prepareLine(entry capturedEntry) ([]byte, error) {
 	if int64(len(line)) > m.cfg.MaxEntryBytes {
 		record["truncated"] = true
 		record["request"] = summarizePayloadBytes(entry.RequestRawBytes, "request")
-		if entry.Meta.Stream {
+		line, err = common.Marshal(record)
+		if err != nil {
+			return nil, fmt.Errorf("marshal truncated request: %w", err)
+		}
+	}
+	if int64(len(line)) > m.cfg.MaxEntryBytes {
+		if entry.UpstreamStream {
 			record["response"] = map[string]any{
-				"type":          "sse",
-				"omitted":       "response",
-				"raw_bytes":     entry.ResponseRawBytes,
-				"raw_chunk_num": entry.ResponseChunkCount,
-				"truncated":     true,
-				"parse_hint":    "entry_exceeded_max_size",
+				"type":       "sse",
+				"omitted":    "response",
+				"raw_bytes":  entry.ResponseRawBytes,
+				"truncated":  true,
+				"parse_hint": "entry_exceeded_max_size",
 			}
 		} else {
 			record["response"] = summarizePayloadBytes(entry.ResponseRawBytes, "response")

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -195,7 +194,7 @@ func TestResetStatusCodeNil(t *testing.T) {
 	require.NotPanics(t, func() { ResetStatusCode(nil, `{"400":429}`) })
 }
 
-func TestUpstreamBadRequestLogsBeforeMapping(t *testing.T) {
+func TestRelayErrorHandlerDoesNotPrintBadRequestBody(t *testing.T) {
 	var output bytes.Buffer
 	common.LogWriterMu.Lock()
 	previous := gin.DefaultErrorWriter
@@ -207,41 +206,18 @@ func TestUpstreamBadRequestLogsBeforeMapping(t *testing.T) {
 		common.LogWriterMu.Unlock()
 	})
 
-	const field = "tools.5.function.parameters/properties/job/type"
-	ctx := context.WithValue(context.Background(), common.RequestIdKey, "local-request-id")
-	request := httptest.NewRequest(http.MethodPost, "https://ark.cn-beijing.volces.com/api/v3/chat/completions", strings.NewReader("must-not-log-request-body"))
-	request.Header.Set("Authorization", "Bearer must-not-log-request-header")
-	response := &http.Response{
-		Request: request, StatusCode: http.StatusBadRequest, Header: make(http.Header),
-		Body: io.NopCloser(strings.NewReader(`{"error":{"message":"` + field + `: invalid schema\nRequest id: ark-body-id","code":"InvalidParameter","param":"` + field + `"}}`)),
+	for _, body := range []string{
+		`{"error":{"message":"original bad request","code":"InvalidParameter"}}`,
+		"plain upstream error",
+	} {
+		response := &http.Response{
+			StatusCode: http.StatusBadRequest,
+			Body:       io.NopCloser(strings.NewReader(body)),
+		}
+		apiErr := RelayErrorHandler(context.Background(), response, false)
+		ResetStatusCode(apiErr, `{"400":429}`)
+		require.Equal(t, http.StatusTooManyRequests, apiErr.StatusCode)
+		require.Equal(t, "无效参数", apiErr.ToOpenAIError().Message)
 	}
-	response.Header.Set("X-Tt-Logid", "ark-log-id")
-	apiErr := RelayErrorHandler(ctx, response, false)
-	ResetStatusCode(apiErr, `{"400":429}`)
-	require.Equal(t, http.StatusTooManyRequests, apiErr.StatusCode)
-	require.Equal(t, "无效参数", apiErr.ToOpenAIError().Message)
-
-	line := strings.TrimSpace(output.String())
-	require.NotContains(t, line, "\n")
-	require.NotContains(t, line, "must-not-log-request-header")
-	require.NotContains(t, line, "must-not-log-request-body")
-	require.Contains(t, line, `local-request-id | upstream HTTP 400: upstream_request_id="ark-log-id"`)
-	require.Contains(t, line, "ark-body-id")
-	require.Contains(t, line, field+": invalid schema")
-	require.Contains(t, line, "InvalidParameter")
-
-	output.Reset()
-	response.StatusCode = http.StatusTooManyRequests
-	response.Body = io.NopCloser(strings.NewReader(`{"error":{"message":"rate limited"}}`))
-	RelayErrorHandler(ctx, response, false)
 	require.Empty(t, output.String())
-
-	output.Reset()
-	response.Request = httptest.NewRequest(http.MethodPost, "https://example.test/api/v3/chat/completions", nil)
-	response.StatusCode = http.StatusBadRequest
-	response.Header = http.Header{"Request-Id": []string{"other-provider-id"}}
-	response.Body = io.NopCloser(strings.NewReader("plain upstream error\nsecond line"))
-	RelayErrorHandler(ctx, response, false)
-	require.Contains(t, output.String(), `upstream_request_id="other-provider-id" body="plain upstream error\nsecond line"`)
-	require.Equal(t, 1, strings.Count(output.String(), "\n"))
 }
