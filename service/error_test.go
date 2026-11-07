@@ -195,7 +195,7 @@ func TestResetStatusCodeNil(t *testing.T) {
 	require.NotPanics(t, func() { ResetStatusCode(nil, `{"400":429}`) })
 }
 
-func TestVolcengineUpstreamErrorLogsBeforeMapping(t *testing.T) {
+func TestUpstreamBadRequestLogsBeforeMapping(t *testing.T) {
 	var output bytes.Buffer
 	common.LogWriterMu.Lock()
 	previous := gin.DefaultErrorWriter
@@ -225,7 +225,7 @@ func TestVolcengineUpstreamErrorLogsBeforeMapping(t *testing.T) {
 	require.NotContains(t, line, "\n")
 	require.NotContains(t, line, "must-not-log-request-header")
 	require.NotContains(t, line, "must-not-log-request-body")
-	require.Contains(t, line, `local-request-id | volcengine upstream 400: upstream_request_id="ark-log-id"`)
+	require.Contains(t, line, `local-request-id | upstream HTTP 400: upstream_request_id="ark-log-id"`)
 	require.Contains(t, line, "ark-body-id")
 	require.Contains(t, line, field+": invalid schema")
 	require.Contains(t, line, "InvalidParameter")
@@ -239,7 +239,9 @@ func TestVolcengineUpstreamErrorLogsBeforeMapping(t *testing.T) {
 	output.Reset()
 	response.Request = httptest.NewRequest(http.MethodPost, "https://example.test/api/v3/chat/completions", nil)
 	response.StatusCode = http.StatusBadRequest
-	response.Body = io.NopCloser(strings.NewReader(`{"error":{"message":"do not add log for other providers","code":"InvalidParameter"}}`))
+	response.Header = http.Header{"Request-Id": []string{"other-provider-id"}}
+	response.Body = io.NopCloser(strings.NewReader("plain upstream error\nsecond line"))
 	RelayErrorHandler(ctx, response, false)
-	require.Empty(t, output.String())
+	require.Contains(t, output.String(), `upstream_request_id="other-provider-id" body="plain upstream error\nsecond line"`)
+	require.Equal(t, 1, strings.Count(output.String(), "\n"))
 }

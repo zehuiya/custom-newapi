@@ -91,7 +91,9 @@ func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFai
 		return
 	}
 	CloseResponseBodyGracefully(resp)
-	loggedArkBadRequest := logVolcengineBadRequest(ctx, resp, responseBody)
+	if resp.StatusCode == http.StatusBadRequest {
+		logUpstreamBadRequest(ctx, resp.Header, responseBody)
+	}
 	var errResponse dto.GeneralErrorResponse
 	buildErrWithBody := func(message string) error {
 		if message == "" {
@@ -105,7 +107,7 @@ func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFai
 		if showBodyWhenFail {
 			newApiErr.Err = buildErrWithBody("")
 		} else {
-			if !loggedArkBadRequest {
+			if resp.StatusCode != http.StatusBadRequest {
 				logger.LogError(ctx, fmt.Sprintf("bad response status code %d, body: %s", resp.StatusCode, string(responseBody)))
 			}
 			newApiErr.Err = fmt.Errorf("bad response status code %d", resp.StatusCode)
