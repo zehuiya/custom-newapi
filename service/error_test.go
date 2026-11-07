@@ -1,14 +1,18 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/types"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
 
@@ -189,4 +193,53 @@ func TestRelayErrorHandlerOverrideBeforeMapping(t *testing.T) {
 
 func TestResetStatusCodeNil(t *testing.T) {
 	require.NotPanics(t, func() { ResetStatusCode(nil, `{"400":429}`) })
+}
+
+func TestVolcengineUpstreamErrorLogsBeforeMapping(t *testing.T) {
+	var output bytes.Buffer
+	common.LogWriterMu.Lock()
+	previous := gin.DefaultErrorWriter
+	gin.DefaultErrorWriter = &output
+	common.LogWriterMu.Unlock()
+	t.Cleanup(func() {
+		common.LogWriterMu.Lock()
+		gin.DefaultErrorWriter = previous
+		common.LogWriterMu.Unlock()
+	})
+
+	const field = "tools.5.function.parameters/properties/job/type"
+	ctx := context.WithValue(context.Background(), common.RequestIdKey, "local-request-id")
+	request := httptest.NewRequest(http.MethodPost, "https://ark.cn-beijing.volces.com/api/v3/chat/completions", strings.NewReader("must-not-log-request-body"))
+	request.Header.Set("Authorization", "Bearer must-not-log-request-header")
+	response := &http.Response{
+		Request: request, StatusCode: http.StatusBadRequest, Header: make(http.Header),
+		Body: io.NopCloser(strings.NewReader(`{"error":{"message":"` + field + `: invalid schema\nRequest id: ark-body-id","code":"InvalidParameter","param":"` + field + `"}}`)),
+	}
+	response.Header.Set("X-Tt-Logid", "ark-log-id")
+	apiErr := RelayErrorHandler(ctx, response, false)
+	ResetStatusCode(apiErr, `{"400":429}`)
+	require.Equal(t, http.StatusTooManyRequests, apiErr.StatusCode)
+	require.Equal(t, "无效参数", apiErr.ToOpenAIError().Message)
+
+	line := strings.TrimSpace(output.String())
+	require.NotContains(t, line, "\n")
+	require.NotContains(t, line, "must-not-log-request-header")
+	require.NotContains(t, line, "must-not-log-request-body")
+	require.Contains(t, line, `local-request-id | volcengine upstream 400: upstream_request_id="ark-log-id"`)
+	require.Contains(t, line, "ark-body-id")
+	require.Contains(t, line, field+": invalid schema")
+	require.Contains(t, line, "InvalidParameter")
+
+	output.Reset()
+	response.StatusCode = http.StatusTooManyRequests
+	response.Body = io.NopCloser(strings.NewReader(`{"error":{"message":"rate limited"}}`))
+	RelayErrorHandler(ctx, response, false)
+	require.Empty(t, output.String())
+
+	output.Reset()
+	response.Request = httptest.NewRequest(http.MethodPost, "https://example.test/api/v3/chat/completions", nil)
+	response.StatusCode = http.StatusBadRequest
+	response.Body = io.NopCloser(strings.NewReader(`{"error":{"message":"do not add log for other providers","code":"InvalidParameter"}}`))
+	RelayErrorHandler(ctx, response, false)
+	require.Empty(t, output.String())
 }
