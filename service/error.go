@@ -134,8 +134,9 @@ func ResetStatusCode(newApiErr *types.NewAPIError, statusCodeMappingStr string) 
 	if newApiErr == nil {
 		return
 	}
-	// Normalize channel errors before applying the channel's status code mapping.
-	if newApiErr.StatusCode != http.StatusTooManyRequests {
+	// Normalize client errors except rate limits before applying the channel mapping.
+	statusCode := newApiErr.StatusCode
+	if statusCode >= http.StatusBadRequest && statusCode < http.StatusInternalServerError && statusCode != http.StatusTooManyRequests {
 		newApiErr.StatusCode = http.StatusBadRequest
 		newApiErr.SetMessage("无效参数")
 		switch relayErr := newApiErr.RelayError.(type) {

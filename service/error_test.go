@@ -23,6 +23,7 @@ func TestResetStatusCode(t *testing.T) {
 		statusCode       int
 		statusCodeConfig string
 		expectedCode     int
+		normalizeMessage bool
 	}{
 		{
 			name:             "map string value",
@@ -43,57 +44,82 @@ func TestResetStatusCode(t *testing.T) {
 			expectedCode:     429,
 		},
 		{
-			name:             "normalize an error carried by status code 200",
+			name:             "do not normalize an error carried by status code 200",
 			statusCode:       200,
-			statusCodeConfig: `{"200":503}`,
-			expectedCode:     400,
+			statusCodeConfig: `{"400":429}`,
+			expectedCode:     200,
 		},
 		{
-			name:         "normalize without mapping",
-			statusCode:   500,
-			expectedCode: 400,
+			name:             "do not normalize below the 4xx range",
+			statusCode:       399,
+			statusCodeConfig: `{"400":429}`,
+			expectedCode:     399,
+		},
+		{
+			name:             "normalize without mapping",
+			statusCode:       499,
+			expectedCode:     400,
+			normalizeMessage: true,
 		},
 		{
 			name:             "normalize with empty mapping",
 			statusCode:       403,
 			statusCodeConfig: `{}`,
 			expectedCode:     400,
+			normalizeMessage: true,
 		},
 		{
 			name:             "normalize with invalid mapping",
-			statusCode:       502,
+			statusCode:       422,
 			statusCodeConfig: `{`,
 			expectedCode:     400,
+			normalizeMessage: true,
 		},
 		{
-			name:             "normalize before mapping string value",
+			name:             "server error uses its own mapping",
 			statusCode:       500,
 			statusCodeConfig: `{"400":"429","500":"503"}`,
-			expectedCode:     429,
+			expectedCode:     503,
+		},
+		{
+			name:             "server error does not match the 400 mapping",
+			statusCode:       502,
+			statusCodeConfig: `{"400":429}`,
+			expectedCode:     502,
+		},
+		{
+			name:             "mapping a server error to 400 does not normalize its message",
+			statusCode:       502,
+			statusCodeConfig: `{"502":400}`,
+			expectedCode:     400,
 		},
 		{
 			name:             "normalize before mapping int value",
 			statusCode:       401,
-			statusCodeConfig: `{"400":429}`,
+			statusCodeConfig: `{"400":429,"401":503}`,
 			expectedCode:     429,
+			normalizeMessage: true,
 		},
 		{
 			name:             "normalize existing 400 before mapping",
 			statusCode:       400,
 			statusCodeConfig: `{"400":429}`,
 			expectedCode:     429,
+			normalizeMessage: true,
 		},
 		{
 			name:             "mapping applies only once",
-			statusCode:       503,
+			statusCode:       403,
 			statusCodeConfig: `{"400":429,"429":503}`,
 			expectedCode:     429,
+			normalizeMessage: true,
 		},
 		{
 			name:             "invalid normalized mapping value",
-			statusCode:       503,
+			statusCode:       404,
 			statusCodeConfig: `{"400":"bad-code"}`,
 			expectedCode:     400,
+			normalizeMessage: true,
 		},
 		{
 			name:         "preserve original 429",
@@ -119,10 +145,10 @@ func TestResetStatusCode(t *testing.T) {
 			}
 			ResetStatusCode(newAPIError, tc.statusCodeConfig)
 			require.Equal(t, tc.expectedCode, newAPIError.StatusCode)
-			if tc.statusCode == http.StatusTooManyRequests {
-				require.Equal(t, "original upstream error", newAPIError.Error())
-			} else {
+			if tc.normalizeMessage {
 				require.Equal(t, "无效参数", newAPIError.Error())
+			} else {
+				require.Equal(t, "original upstream error", newAPIError.Error())
 			}
 		})
 	}
@@ -154,11 +180,13 @@ func TestResetStatusCodeErrorFormats(t *testing.T) {
 				apiErr := factory(status)
 				originalCode := apiErr.GetErrorCode()
 				ResetStatusCode(apiErr, `{"400":429}`)
-				require.Equal(t, http.StatusTooManyRequests, apiErr.StatusCode)
-				message := "无效参数"
-				if status == http.StatusTooManyRequests {
-					message = "original upstream error"
+				expectedStatus := status
+				message := "original upstream error"
+				if status < http.StatusInternalServerError && status != http.StatusTooManyRequests {
+					expectedStatus = http.StatusTooManyRequests
+					message = "无效参数"
 				}
+				require.Equal(t, expectedStatus, apiErr.StatusCode, "upstream status %d", status)
 				require.Equal(t, message, apiErr.Error())
 				require.Equal(t, message, apiErr.ToOpenAIError().Message)
 				require.Equal(t, message, apiErr.ToClaudeError().Message)
@@ -180,12 +208,21 @@ func TestRelayErrorHandlerOverrideBeforeMapping(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			resp := &http.Response{StatusCode: http.StatusInternalServerError, Body: io.NopCloser(strings.NewReader(body))}
-			apiErr := RelayErrorHandler(context.Background(), resp, false)
-			ResetStatusCode(apiErr, `{"400":429,"500":503}`)
-			require.Equal(t, http.StatusTooManyRequests, apiErr.StatusCode)
-			require.Equal(t, "无效参数", apiErr.ToOpenAIError().Message)
-			require.Equal(t, "无效参数", apiErr.ToClaudeError().Message)
+			clientResp := &http.Response{StatusCode: http.StatusForbidden, Body: io.NopCloser(strings.NewReader(body))}
+			clientErr := RelayErrorHandler(context.Background(), clientResp, false)
+			ResetStatusCode(clientErr, `{"400":429}`)
+			require.Equal(t, http.StatusTooManyRequests, clientErr.StatusCode)
+			require.Equal(t, "无效参数", clientErr.ToOpenAIError().Message)
+			require.Equal(t, "无效参数", clientErr.ToClaudeError().Message)
+
+			serverResp := &http.Response{StatusCode: http.StatusBadGateway, Body: io.NopCloser(strings.NewReader(body))}
+			serverErr := RelayErrorHandler(context.Background(), serverResp, false)
+			openAIMessage := serverErr.ToOpenAIError().Message
+			claudeMessage := serverErr.ToClaudeError().Message
+			ResetStatusCode(serverErr, `{"400":429}`)
+			require.Equal(t, http.StatusBadGateway, serverErr.StatusCode)
+			require.Equal(t, openAIMessage, serverErr.ToOpenAIError().Message)
+			require.Equal(t, claudeMessage, serverErr.ToClaudeError().Message)
 		})
 	}
 }
