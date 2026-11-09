@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -130,6 +131,8 @@ func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFai
 	return
 }
 
+var upstreamRequestSuffix = regexp.MustCompile(`(?i)request`)
+
 func ResetStatusCode(newApiErr *types.NewAPIError, statusCodeMappingStr string) {
 	if newApiErr == nil {
 		return
@@ -138,15 +141,12 @@ func ResetStatusCode(newApiErr *types.NewAPIError, statusCodeMappingStr string) 
 	statusCode := newApiErr.StatusCode
 	if statusCode >= http.StatusBadRequest && statusCode < http.StatusInternalServerError && statusCode != http.StatusTooManyRequests {
 		newApiErr.StatusCode = http.StatusBadRequest
-		newApiErr.SetMessage("无效参数")
-		switch relayErr := newApiErr.RelayError.(type) {
-		case types.OpenAIError:
-			relayErr.Message = newApiErr.Error()
-			newApiErr.RelayError = relayErr
-		case types.ClaudeError:
-			relayErr.Message = newApiErr.Error()
-			newApiErr.RelayError = relayErr
+		message := newApiErr.Error()
+		if match := upstreamRequestSuffix.FindStringIndex(message); match != nil {
+			message = message[:match[0]]
+			newApiErr.SetMessage(message)
 		}
+		newApiErr.SetResponseMessage(message)
 	}
 	if statusCodeMappingStr == "" || statusCodeMappingStr == "{}" {
 		return

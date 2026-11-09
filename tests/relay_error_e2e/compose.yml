@@ -1,0 +1,53 @@
+services:
+  new-api:
+    image: ${E2E_IMAGE:?set E2E_IMAGE}
+    environment:
+      SQL_DSN: postgres://relaytest:relaytest@postgres:5432/relaytest?sslmode=disable
+      REDIS_CONN_STRING: redis://redis:6379
+      SESSION_SECRET: isolated-relay-error-e2e
+      PAYLOAD_LOG_ENABLED: "true"
+      PAYLOAD_LOG_SAMPLE_RATE: "1"
+      PAYLOAD_LOG_DIR: /report/payload
+      GLOBAL_API_RATE_LIMIT_ENABLE: "false"
+      GLOBAL_WEB_RATE_LIMIT_ENABLE: "false"
+      CRITICAL_RATE_LIMIT_ENABLE: "false"
+    volumes:
+      - ${E2E_OUTPUT_DIR:?set E2E_OUTPUT_DIR}:/report
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/api/status"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: relaytest
+      POSTGRES_PASSWORD: relaytest
+      POSTGRES_DB: relaytest
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U relaytest -d relaytest"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  tests:
+    image: python:3.12-alpine
+    network_mode: service:new-api
+    depends_on:
+      new-api:
+        condition: service_healthy
+    command: ["python", "/tests/relay_error_e2e/run_e2e.py"]
+    volumes:
+      - ..:/tests:ro
+      - ${E2E_OUTPUT_DIR:?set E2E_OUTPUT_DIR}:/report

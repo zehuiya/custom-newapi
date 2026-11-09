@@ -106,9 +106,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			case types.RelayFormatOpenAIRealtime:
 				helper.WssError(c, ws, newAPIError.ToOpenAIError())
 			case types.RelayFormatClaude:
+				relayError := newAPIError.ToClaudeError()
 				c.JSON(newAPIError.StatusCode, gin.H{
 					"type":  "error",
-					"error": newAPIError.ToClaudeError(),
+					"error": gin.H{"type": relayError.Type, "message": relayError.Message},
 				})
 			default:
 				c.JSON(newAPIError.StatusCode, gin.H{

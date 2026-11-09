@@ -141,14 +141,14 @@ func TestResetStatusCode(t *testing.T) {
 
 			newAPIError := &types.NewAPIError{
 				StatusCode: tc.statusCode,
-				Err:        errors.New("original upstream error"),
+				Err:        errors.New("original upstream error, rEqUeSt_id: hidden"),
 			}
 			ResetStatusCode(newAPIError, tc.statusCodeConfig)
 			require.Equal(t, tc.expectedCode, newAPIError.StatusCode)
 			if tc.normalizeMessage {
-				require.Equal(t, "无效参数", newAPIError.Error())
+				require.Equal(t, "original upstream error, ", newAPIError.Error())
 			} else {
-				require.Equal(t, "original upstream error", newAPIError.Error())
+				require.Equal(t, "original upstream error, rEqUeSt_id: hidden", newAPIError.Error())
 			}
 		})
 	}
@@ -160,16 +160,16 @@ func TestResetStatusCodeErrorFormats(t *testing.T) {
 	factories := map[string]func(int) *types.NewAPIError{
 		"openai": func(status int) *types.NewAPIError {
 			return types.WithOpenAIError(types.OpenAIError{
-				Message: "original upstream error", Type: "upstream_error", Code: "upstream_code",
+				Message: "上游错误, REQUEST_id: hidden", Type: "upstream_error", Code: "upstream_code",
 			}, status, types.ErrOptionWithSkipRetry())
 		},
 		"claude": func(status int) *types.NewAPIError {
 			return types.WithClaudeError(types.ClaudeError{
-				Message: "original upstream error", Type: "upstream_error",
+				Message: "上游错误, REQUEST_id: hidden", Type: "upstream_error",
 			}, status, types.ErrOptionWithSkipRetry())
 		},
 		"generic": func(status int) *types.NewAPIError {
-			return types.NewError(errors.New("original upstream error"), types.ErrorCodeBadResponse,
+			return types.NewError(errors.New("上游错误, REQUEST_id: hidden"), types.ErrorCodeBadResponse,
 				types.ErrOptionWithStatusCode(status), types.ErrOptionWithSkipRetry())
 		},
 	}
@@ -181,10 +181,10 @@ func TestResetStatusCodeErrorFormats(t *testing.T) {
 				originalCode := apiErr.GetErrorCode()
 				ResetStatusCode(apiErr, `{"400":429}`)
 				expectedStatus := status
-				message := "original upstream error"
+				message := "上游错误, REQUEST_id: hidden"
 				if status < http.StatusInternalServerError && status != http.StatusTooManyRequests {
 					expectedStatus = http.StatusTooManyRequests
-					message = "无效参数"
+					message = "上游错误, "
 				}
 				require.Equal(t, expectedStatus, apiErr.StatusCode, "upstream status %d", status)
 				require.Equal(t, message, apiErr.Error())
@@ -193,6 +193,29 @@ func TestResetStatusCodeErrorFormats(t *testing.T) {
 				require.Equal(t, originalCode, apiErr.GetErrorCode())
 				require.True(t, types.IsSkipRetryError(apiErr))
 			}
+		})
+	}
+}
+
+func TestResetStatusCodeResponseMessage(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ original, want string }{
+		{"limit 1M token, request_id:abc", "limit 1M token, "},
+		{"İ限额; ReQuEsT:abc REQUEST:def", "İ限额; "},
+		{"Request ID abc", ""},
+		{"limit 1M token", "limit 1M token"},
+		{"  invalid temperature  ", "  invalid temperature  "},
+	} {
+		t.Run(tc.original, func(t *testing.T) {
+			apiErr := types.WithOpenAIError(types.OpenAIError{Message: tc.original, Code: "limit", Param: "input"}, http.StatusForbidden)
+			ResetStatusCode(apiErr, `{"400":429}`)
+			// The relay adds its own request ID to the internal message just before serialization.
+			apiErr.SetMessage(common.MessageWithRequestId(apiErr.Error(), "gateway-id"))
+			require.Equal(t, http.StatusTooManyRequests, apiErr.StatusCode)
+			require.Equal(t, tc.want, apiErr.ToOpenAIError().Message)
+			require.Equal(t, tc.want, apiErr.ToClaudeError().Message)
+			require.Equal(t, "limit", apiErr.ToOpenAIError().Code)
+			require.Equal(t, "input", apiErr.ToOpenAIError().Param)
 		})
 	}
 }
@@ -210,10 +233,11 @@ func TestRelayErrorHandlerOverrideBeforeMapping(t *testing.T) {
 			t.Parallel()
 			clientResp := &http.Response{StatusCode: http.StatusForbidden, Body: io.NopCloser(strings.NewReader(body))}
 			clientErr := RelayErrorHandler(context.Background(), clientResp, false)
+			original := clientErr.Error()
 			ResetStatusCode(clientErr, `{"400":429}`)
 			require.Equal(t, http.StatusTooManyRequests, clientErr.StatusCode)
-			require.Equal(t, "无效参数", clientErr.ToOpenAIError().Message)
-			require.Equal(t, "无效参数", clientErr.ToClaudeError().Message)
+			require.Equal(t, original, clientErr.ToOpenAIError().Message)
+			require.Equal(t, original, clientErr.ToClaudeError().Message)
 
 			serverResp := &http.Response{StatusCode: http.StatusBadGateway, Body: io.NopCloser(strings.NewReader(body))}
 			serverErr := RelayErrorHandler(context.Background(), serverResp, false)
@@ -244,7 +268,7 @@ func TestRelayErrorHandlerDoesNotPrintBadRequestBody(t *testing.T) {
 	})
 
 	for _, body := range []string{
-		`{"error":{"message":"original bad request","code":"InvalidParameter"}}`,
+		`{"error":{"message":"original invalid input","code":"InvalidParameter"}}`,
 		"plain upstream error",
 	} {
 		response := &http.Response{
@@ -252,9 +276,10 @@ func TestRelayErrorHandlerDoesNotPrintBadRequestBody(t *testing.T) {
 			Body:       io.NopCloser(strings.NewReader(body)),
 		}
 		apiErr := RelayErrorHandler(context.Background(), response, false)
+		original := apiErr.Error()
 		ResetStatusCode(apiErr, `{"400":429}`)
 		require.Equal(t, http.StatusTooManyRequests, apiErr.StatusCode)
-		require.Equal(t, "无效参数", apiErr.ToOpenAIError().Message)
+		require.Equal(t, original, apiErr.ToOpenAIError().Message)
 	}
 	require.Empty(t, output.String())
 }

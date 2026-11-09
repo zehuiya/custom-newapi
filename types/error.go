@@ -88,14 +88,15 @@ const (
 )
 
 type NewAPIError struct {
-	Err            error
-	RelayError     any
-	skipRetry      bool
-	recordErrorLog *bool
-	errorType      ErrorType
-	errorCode      ErrorCode
-	StatusCode     int
-	Metadata       json.RawMessage
+	Err             error
+	RelayError      any
+	skipRetry       bool
+	recordErrorLog  *bool
+	responseMessage *string
+	errorType       ErrorType
+	errorCode       ErrorCode
+	StatusCode      int
+	Metadata        json.RawMessage
 }
 
 // Unwrap enables errors.Is / errors.As to work with NewAPIError by exposing the underlying error.
@@ -177,6 +178,11 @@ func (e *NewAPIError) SetMessage(message string) {
 	e.Err = errors.New(message)
 }
 
+// SetResponseMessage overrides the client-facing text without changing error metadata.
+func (e *NewAPIError) SetResponseMessage(message string) {
+	e.responseMessage = &message
+}
+
 func (e *NewAPIError) ToOpenAIError() OpenAIError {
 	var result OpenAIError
 	switch e.errorType {
@@ -201,12 +207,7 @@ func (e *NewAPIError) ToOpenAIError() OpenAIError {
 			Code:    e.errorCode,
 		}
 	}
-	if e.errorCode != ErrorCodeCountTokenFailed {
-		result.Message = common.MaskSensitiveInfo(result.Message)
-	}
-	if result.Message == "" {
-		result.Message = string(e.errorType)
-	}
+	result.Message = e.formatResponseMessage(result.Message)
 	return result
 }
 
@@ -230,13 +231,21 @@ func (e *NewAPIError) ToClaudeError() ClaudeError {
 			Type:    string(e.errorType),
 		}
 	}
-	if e.errorCode != ErrorCodeCountTokenFailed {
-		result.Message = common.MaskSensitiveInfo(result.Message)
-	}
-	if result.Message == "" {
-		result.Message = string(e.errorType)
-	}
+	result.Message = e.formatResponseMessage(result.Message)
 	return result
+}
+
+func (e *NewAPIError) formatResponseMessage(message string) string {
+	if e.responseMessage != nil {
+		message = *e.responseMessage
+	}
+	if e.errorCode != ErrorCodeCountTokenFailed {
+		message = common.MaskSensitiveInfo(message)
+	}
+	if message == "" && e.responseMessage == nil {
+		return string(e.errorType)
+	}
+	return message
 }
 
 type NewAPIErrorOptions func(*NewAPIError)
