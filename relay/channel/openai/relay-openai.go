@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -284,19 +285,22 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 
-	if simpleResponse.Id != "" {
-		info.UpstreamResponseId = simpleResponse.Id
-	}
-
 	if oaiError := simpleResponse.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 
 	for _, choice := range simpleResponse.Choices {
 		if choice.FinishReason == constant.FinishReasonContentFilter {
+			if info.RelayFormat == types.RelayFormatOpenAI && !info.IsStream && !info.ForceStreamBuffer {
+				return nil, types.NewOpenAIError(errors.New(choice.FinishReason), types.ErrorCodeContentFilter, http.StatusTooManyRequests)
+			}
 			common.SetContextKey(c, constant.ContextKeyAdminRejectReason, "openai_finish_reason=content_filter")
 			break
 		}
+	}
+
+	if simpleResponse.Id != "" {
+		info.UpstreamResponseId = simpleResponse.Id
 	}
 
 	forceFormat := false

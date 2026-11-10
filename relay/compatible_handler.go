@@ -213,6 +213,11 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 
 	usage, newApiErr := adaptor.DoResponse(c, httpResp, info)
 	if newApiErr != nil {
+		// Keep a synthesized moderation error on the 429 retry path.
+		if info.RelayFormat == types.RelayFormatOpenAI && !info.IsStream && !info.ForceStreamBuffer &&
+			newApiErr.StatusCode == http.StatusTooManyRequests && newApiErr.GetErrorCode() == types.ErrorCodeContentFilter {
+			return newApiErr
+		}
 		// reset status code 重置状态码
 		service.ResetStatusCode(newApiErr, statusCodeMappingStr)
 		return newApiErr

@@ -73,6 +73,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	var (
 		newAPIError      *types.NewAPIError
+		contentFilterErr *types.NewAPIError
 		relayInfo        *relaycommon.RelayInfo
 		payloadLogFinish func(*relaypayloadlog.ErrorInfo) bool
 		ws               *websocket.Conn
@@ -97,6 +98,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	defer func() {
 		if newAPIError != nil {
+			// A failed fallback does not replace the moderation result reported to the client.
+			if contentFilterErr != nil && !service.IsViolationFeeCode(newAPIError.GetErrorCode()) {
+				newAPIError = contentFilterErr
+			}
 			logger.LogError(c, fmt.Sprintf("relay error: %s", newAPIError.Error()))
 			newAPIError.SetMessage(common.MessageWithRequestId(newAPIError.Error(), requestId))
 			if relayInfo != nil && relayInfo.IsStream && c.Writer.Written() {
@@ -276,6 +281,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 		newAPIError = service.NormalizeViolationFeeError(newAPIError)
 		relayInfo.LastError = newAPIError
+		if relayFormat == types.RelayFormatOpenAI && !relayInfo.IsStream && !relayInfo.ForceStreamBuffer &&
+			newAPIError.GetErrorCode() == types.ErrorCodeContentFilter {
+			contentFilterErr = newAPIError
+		}
 
 		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
 

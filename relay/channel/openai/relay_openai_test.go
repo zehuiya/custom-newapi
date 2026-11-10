@@ -168,6 +168,60 @@ func TestSyntheticCacheInjectionOverridePreservesHigherOpenAICache(t *testing.T)
 	require.Equal(t, 9000, usage.PromptTokensDetails.CachedTokens)
 }
 
+func TestOpenaiHandlerContentFilter(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tt := range []struct {
+		name              string
+		finishReason      string
+		forceStreamBuffer bool
+		wantError         bool
+	}{
+		{name: "non-stream content filter", finishReason: "content_filter", wantError: true},
+		{name: "ordinary completion", finishReason: "stop"},
+		{name: "buffered upstream stream unchanged", finishReason: "content_filter", forceStreamBuffer: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			body := fmt.Sprintf(`{"id":"upstream-id","choices":[
+				{"index":0,"finish_reason":"stop","message":{"content":"first"}},
+				{"index":1,"finish_reason":%q,"message":{"content":"second"}}
+			],"usage":{"prompt_tokens":7,"completion_tokens":3,"total_tokens":10}}`, tt.finishReason)
+			resp := &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(body)),
+			}
+			info := &relaycommon.RelayInfo{
+				RelayFormat:       types.RelayFormatOpenAI,
+				ForceStreamBuffer: tt.forceStreamBuffer,
+				ChannelMeta:       &relaycommon.ChannelMeta{},
+			}
+
+			usage, err := OpenaiHandler(c, info, resp)
+
+			if tt.wantError {
+				require.Nil(t, usage)
+				require.NotNil(t, err)
+				require.Equal(t, http.StatusTooManyRequests, err.StatusCode)
+				require.Equal(t, types.ErrorCodeContentFilter, err.GetErrorCode())
+				require.Equal(t, "content_filter", err.ToOpenAIError().Message)
+				require.False(t, types.IsSkipRetryError(err))
+				require.False(t, c.Writer.Written())
+				require.Empty(t, w.Body.String())
+				require.Empty(t, common.GetContextKeyString(c, constant.ContextKeyAdminRejectReason))
+				require.Empty(t, info.UpstreamResponseId)
+				return
+			}
+			require.Nil(t, err)
+			require.Equal(t, "upstream-id", info.UpstreamResponseId)
+			require.Equal(t, 10, usage.TotalTokens)
+			require.Equal(t, http.StatusOK, w.Code)
+			require.Equal(t, tt.finishReason, gjson.Get(w.Body.String(), "choices.1.finish_reason").String())
+		})
+	}
+}
+
 func TestOpenaiHandlerSyntheticCacheDoesNotReplaceProviderSpecificCache(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
