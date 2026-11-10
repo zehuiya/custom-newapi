@@ -1,0 +1,37 @@
+relay/compatible_handler.go
+  s_10d0b4cbf278c6::t_06a0812f5cdf6b 216-220
+relay/channel/openai/relay-openai.go
+  s_10d0b4cbf278c6::t_d80122abb2f6ca 4,294-296
+  s_10d0b4cbf278c6::t_88dc8e5cdd1032 300-303
+types/error.go
+  s_10d0b4cbf278c6::t_d80122abb2f6ca 80
+controller/relay_content_filter_test.go
+  s_10d0b4cbf278c6::t_962f1742fbd74a 1-27,29-41,43-45,47-50,52-103,105-126,131-137,139-146
+  s_10d0b4cbf278c6::t_e80a513c3f1c8b 42,46,51
+  s_10d0b4cbf278c6::t_06a0812f5cdf6b 104
+  s_10d0b4cbf278c6::t_88dc8e5cdd1032 28,127-130,138
+controller/relay.go
+  s_10d0b4cbf278c6::t_d80122abb2f6ca 76,101-104,284-287
+relay/channel/openai/relay_openai_test.go
+  s_10d0b4cbf278c6::t_962f1742fbd74a 171-212,214-216,218-224
+  s_10d0b4cbf278c6::t_88dc8e5cdd1032 213,217
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "f0bef476a4ea659564c94a1a03107e852f2d117d",
+  "prompts": {},
+  "logical_commit_id": "f0bef476a4ea659564c94a1a03107e852f2d117d",
+  "sessions": {
+    "s_10d0b4cbf278c6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019e9112-50c3-7ed0-8ba6-bfbe99f02c65",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "xieqingxing <xieqingxing@bigo.sg>",
+      "total_additions": 225,
+      "total_deletions": 6
+    }
+  }
+}
