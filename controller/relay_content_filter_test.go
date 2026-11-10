@@ -26,6 +26,7 @@ func TestRelayOpenAIContentFilterRetry(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	const modelName = "test-content-filter"
 	const filtered = `{"id":"filtered-attempt-id","choices":[{"index":0,"finish_reason":"content_filter","message":{"role":"assistant","content":"upstream refusal"}}],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}`
+	const rejected = `{"error":{"type":"upstream_error","code":"content_filter","message":"upstream refusal"}}`
 	const completed = `{"choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"fallback answer"}}],"usage":{"prompt_tokens":7,"completion_tokens":3,"total_tokens":10}}`
 	const failed = `{"error":{"type":"upstream_error","code":"bad_gateway","message":"fallback failure"}}`
 	const filteredSSE = "data: {\"id\":\"stream-id\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"upstream refusal\"},\"finish_reason\":\"content_filter\"}]}\n\n" +
@@ -54,15 +55,26 @@ func TestRelayOpenAIContentFilterRetry(t *testing.T) {
 	t.Cleanup(service.GetHttpClient().CloseIdleConnections)
 
 	for _, tt := range []struct {
-		name       string
-		stream     bool
-		secondCode int
-		secondBody string
-		wantStatus int
+		name             string
+		stream           bool
+		native429        bool
+		mapping          string
+		secondCode       int
+		secondBody       string
+		wantStatus       int
+		wantRetry        bool
+		wantErrorCode    string
+		wantErrorMessage string
 	}{
-		{name: "second channel succeeds", secondCode: http.StatusOK, secondBody: completed, wantStatus: http.StatusOK},
-		{name: "both channels filtered", secondCode: http.StatusOK, secondBody: filtered, wantStatus: http.StatusTooManyRequests},
-		{name: "fallback fails differently", secondCode: http.StatusBadGateway, secondBody: failed, wantStatus: http.StatusTooManyRequests},
+		{name: "second channel succeeds", secondCode: http.StatusOK, secondBody: completed, wantStatus: http.StatusOK, wantRetry: true},
+		{name: "both channels filtered", secondCode: http.StatusOK, secondBody: filtered, wantStatus: http.StatusTooManyRequests,
+			wantRetry: true, wantErrorCode: "content_filter", wantErrorMessage: "content_filter"},
+		{name: "fallback fails differently", secondCode: http.StatusBadGateway, secondBody: failed, wantStatus: http.StatusBadGateway,
+			wantRetry: true, wantErrorCode: "bad_gateway", wantErrorMessage: "fallback failure"},
+		{name: "native content filter also returns fallback failure", native429: true, secondCode: http.StatusBadGateway, secondBody: failed,
+			wantStatus: http.StatusBadGateway, wantRetry: true, wantErrorCode: "bad_gateway", wantErrorMessage: "fallback failure"},
+		{name: "channel status mapping prevents retry", mapping: `{"429":400}`, secondCode: http.StatusOK, secondBody: completed,
+			wantStatus: http.StatusBadRequest, wantErrorCode: "content_filter", wantErrorMessage: "content_filter"},
 		{name: "stream is not retried", stream: true, secondCode: http.StatusOK, secondBody: completed, wantStatus: http.StatusOK},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -95,13 +107,17 @@ func TestRelayOpenAIContentFilterRetry(t *testing.T) {
 				}).Error)
 				return channel, &calls
 			}
-			contentType, firstBody := "application/json", filtered
+			firstCode, contentType, firstBody := http.StatusOK, "application/json", filtered
 			if tt.stream {
 				contentType, firstBody = "text/event-stream", filteredSSE
+			} else if tt.native429 {
+				firstCode, firstBody = http.StatusTooManyRequests, rejected
 			}
-			first, firstCalls := newChannel(2, http.StatusOK, contentType, firstBody)
+			first, firstCalls := newChannel(2, firstCode, contentType, firstBody)
 			second, secondCalls := newChannel(1, tt.secondCode, "application/json", tt.secondBody)
-			first.StatusCodeMapping = common.GetPointer(`{"429":400}`)
+			if tt.mapping != "" {
+				first.StatusCodeMapping = common.GetPointer(tt.mapping)
+			}
 
 			w := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(w)
@@ -122,12 +138,20 @@ func TestRelayOpenAIContentFilterRetry(t *testing.T) {
 				require.Contains(t, w.Body.String(), `"finish_reason":"content_filter"`)
 				return
 			}
-			require.EqualValues(t, 1, secondCalls.Load())
+			if tt.wantRetry {
+				require.EqualValues(t, 1, secondCalls.Load())
+			} else {
+				require.Zero(t, secondCalls.Load())
+			}
 			require.NotContains(t, w.Body.String(), "upstream refusal")
 			var firstError model.Log
 			require.NoError(t, db.Where("type = ? AND channel_id = ?", model.LogTypeError, first.Id).First(&firstError).Error)
 			require.Equal(t, "content_filter", gjson.Get(firstError.Other, "error_code").String())
-			require.EqualValues(t, http.StatusTooManyRequests, gjson.Get(firstError.Other, "status_code").Int())
+			wantFirstStatus := http.StatusTooManyRequests
+			if !tt.wantRetry {
+				wantFirstStatus = tt.wantStatus
+			}
+			require.EqualValues(t, wantFirstStatus, gjson.Get(firstError.Other, "status_code").Int())
 			var consumeLogs []model.Log
 			require.NoError(t, db.Where("type = ?", model.LogTypeConsume).Find(&consumeLogs).Error)
 			if tt.wantStatus == http.StatusOK {
@@ -137,8 +161,8 @@ func TestRelayOpenAIContentFilterRetry(t *testing.T) {
 				require.Empty(t, gjson.Get(consumeLogs[0].Other, "reject_reason").String())
 				require.Empty(t, gjson.Get(consumeLogs[0].Other, "upstream_response_id").String())
 			} else {
-				require.Equal(t, "content_filter", gjson.Get(w.Body.String(), "error.message").String())
-				require.Equal(t, "content_filter", gjson.Get(w.Body.String(), "error.code").String())
+				require.Equal(t, tt.wantErrorMessage, gjson.Get(w.Body.String(), "error.message").String())
+				require.Equal(t, tt.wantErrorCode, gjson.Get(w.Body.String(), "error.code").String())
 				require.Empty(t, consumeLogs)
 			}
 		})
