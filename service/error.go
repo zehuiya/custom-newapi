@@ -143,7 +143,8 @@ func ResetStatusCode(newApiErr *types.NewAPIError, statusCodeMappingStr string) 
 		return
 	}
 	message := newApiErr.Error()
-	if upstreamTooBig.MatchString(message) {
+	// Keep 413 unchanged so it cannot be mapped to a retryable status.
+	if newApiErr.StatusCode == http.StatusRequestEntityTooLarge || upstreamTooBig.MatchString(message) {
 		newApiErr.PreserveStatusCode()
 	}
 	// Normalize client errors except rate limits before applying the channel mapping.

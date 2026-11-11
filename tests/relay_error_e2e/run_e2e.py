@@ -16,6 +16,8 @@ class MockHandler(base.MockHandler):
         if self.server.error is None:
             return super().do_POST()
         self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        with self.server.records_lock:
+            self.server.records.append({"label": self.path.strip("/").split("/")[0]})
         status, message = self.server.error
         error = {"message": message, "type": "upstream_error", "code": "mock_error", "param": "input"}
         self.send_json(status, {"type": "error", "error": error})
@@ -31,13 +33,15 @@ class ErrorE2E(base.E2E):
         assert json.loads(saved["status_code_mapping"]) == mapping
         self.channels[label] = saved
 
-    def check_error(self, label, upstream, original, status, expected, stream=False):
+    def check_error(self, label, upstream, original, status, expected, stream=False, routes=None):
         _, path, model = base.SPECS[label]
         body = {"model": model, "stream": stream}
         if label == "responses":
             body["input"] = "hello"
         else:
             body.update(messages=[{"role": "user", "content": "hello"}], max_tokens=64)
+        with self.mock.records_lock:
+            start = len(self.mock.records)
         self.mock.error = (upstream, original)
         try:
             code, headers, raw = self.request("POST", path, body, {
@@ -54,8 +58,12 @@ class ErrorE2E(base.E2E):
         else:
             assert error["code"] == "mock_error" and error["param"] == "input", error
         assert message == expected, (label, repr(expected), repr(message), raw)
+        with self.mock.records_lock:
+            actual_routes = [attempt["label"] for attempt in self.mock.records[start:]]
+        assert actual_routes == (routes if routes is not None else [label]), actual_routes
         self.results.append({"protocol": label, "stream_requested": stream, "upstream_status": upstream,
-                             "http_status": code, "original": original, "message": message, "request_id": rid})
+                             "http_status": code, "original": original, "message": message, "request_id": rid,
+                             "upstream_routes": actual_routes})
 
     def check_payloads(self):
         errors = {r["request_id"]: r for r in self.results if "original" in r}
@@ -102,14 +110,34 @@ class ErrorE2E(base.E2E):
             for stream in (False, True):
                 self.check_error(label, 400, oversized, 400, "Entry too big, ", stream)
             self.check_error(label, 413, "Payload TOO BIG", 413, "Payload TOO BIG")
+            self.check_error(label, 413, "Body exceeds size limit", 413, "Body exceeds size limit", stream=True)
             for status in (429, 502):
                 self.check_error(label, status, "Entry too big", status, "Entry too big")
             self.check(label, enabled=False)
             self.check(label, enabled=False, stream=True)
+        self.check_retry_boundary()
         self.check_payloads()
         self.report.write_text(json.dumps({"cases_passed": len(self.results), "results": self.results},
                                          ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"Passed all {len(self.results)} relay error and success cases", flush=True)
+
+    def check_retry_boundary(self):
+        # Allow 400 and 413 in the configured retry ranges to verify the hard exception.
+        self.api("PUT", "/api/option/", {"key": "AutomaticRetryStatusCodes", "value": "400,413,429"})
+        primary = dict(self.channels["chat"])
+        fallback = dict(self.channels["responses"])
+        primary.pop("key", None)
+        fallback.pop("key", None)
+        model = base.SPECS["chat"][2]
+        fallback.update(priority=50, models=model, model_mapping=json.dumps({model: base.UPSTREAM_REQUEST_MODEL}),
+                        status_code_mapping="{}")
+        self.api("PUT", "/api/channel/", fallback)
+        primary.update(setting=json.dumps({"fallback_channel_ids": [fallback["id"]]}),
+                       status_code_mapping=json.dumps({"400": 429, "413": 503}))
+        self.api("PUT", "/api/channel/", primary)
+        self.check_error("chat", 413, "Entry too big", 413, "Entry too big")
+        self.check_error("chat", 413, "Body exceeds size limit", 413, "Body exceeds size limit")
+        self.check_error("chat", 429, "capacity full", 429, "capacity full", routes=["chat", "responses"])
 
 
 def main():

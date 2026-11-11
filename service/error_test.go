@@ -183,7 +183,9 @@ func TestResetStatusCodeErrorFormats(t *testing.T) {
 				expectedStatus := status
 				message := "上游错误, REQUEST_id: hidden"
 				if status < http.StatusInternalServerError && status != http.StatusTooManyRequests {
-					expectedStatus = http.StatusTooManyRequests
+					if status != http.StatusRequestEntityTooLarge {
+						expectedStatus = http.StatusTooManyRequests
+					}
 					message = "上游错误, "
 				}
 				require.Equal(t, expectedStatus, apiErr.StatusCode, "upstream status %d", status)
@@ -266,6 +268,7 @@ func TestResetStatusCodePreservesTooBigErrors(t *testing.T) {
 	}{
 		{"openai", 400, `{"error":{"message":"Entry too big, request_id: upstream-id"}}`, 400, "Entry too big, "},
 		{"original 413", 413, `{"error":{"message":"Entry TOO BIG"}}`, 413, "Entry TOO BIG"},
+		{"413 without phrase", 413, `{"error":{"message":"Payload exceeds the limit"}}`, 413, "Payload exceeds the limit"},
 		{"phrase after request", 413, `{"error":{"message":"Invalid request: payload too big"}}`, 413, "Invalid "},
 		{"plain text", 400, "Entry Too Big; internal raw details", 400, "bad response status code 400"},
 		{"original 429", 429, `{"error":{"message":"Entry too big"}}`, 429, "Entry too big"},

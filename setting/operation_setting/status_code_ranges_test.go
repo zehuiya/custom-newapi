@@ -56,6 +56,7 @@ func TestShouldRetryByStatusCode(t *testing.T) {
 	t.Cleanup(func() { AutomaticRetryStatusCodeRanges = orig })
 
 	AutomaticRetryStatusCodeRanges = []StatusCodeRange{
+		{Start: 413, End: 413},
 		{Start: 429, End: 429},
 		{Start: 500, End: 599},
 	}
@@ -64,15 +65,17 @@ func TestShouldRetryByStatusCode(t *testing.T) {
 	require.True(t, ShouldRetryByStatusCode(500))
 	require.False(t, ShouldRetryByStatusCode(504))
 	require.False(t, ShouldRetryByStatusCode(524))
+	require.False(t, ShouldRetryByStatusCode(413))
 	require.False(t, ShouldRetryByStatusCode(400))
 	require.False(t, ShouldRetryByStatusCode(200))
 }
 
-func TestShouldRetryByStatusCode_DefaultMatchesLegacyBehavior(t *testing.T) {
+func TestShouldRetryByStatusCode_DefaultRules(t *testing.T) {
 	require.False(t, ShouldRetryByStatusCode(200))
 	require.False(t, ShouldRetryByStatusCode(400))
 	require.True(t, ShouldRetryByStatusCode(401))
 	require.False(t, ShouldRetryByStatusCode(408))
+	require.False(t, ShouldRetryByStatusCode(413))
 	require.True(t, ShouldRetryByStatusCode(429))
 	require.True(t, ShouldRetryByStatusCode(500))
 	require.False(t, ShouldRetryByStatusCode(504))
