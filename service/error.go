@@ -102,6 +102,10 @@ func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFai
 
 	err = common.Unmarshal(responseBody, &errResponse)
 	if err != nil {
+		// Preserve the status for plain-text size errors without exposing the raw body.
+		if upstreamTooBig.Match(responseBody) {
+			newApiErr.PreserveStatusCode()
+		}
 		if showBodyWhenFail {
 			newApiErr.Err = buildErrWithBody("")
 		} else {
@@ -132,23 +136,29 @@ func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFai
 }
 
 var upstreamRequestSuffix = regexp.MustCompile(`(?i)request`)
+var upstreamTooBig = regexp.MustCompile(`(?i)too big`)
 
 func ResetStatusCode(newApiErr *types.NewAPIError, statusCodeMappingStr string) {
 	if newApiErr == nil {
 		return
 	}
+	message := newApiErr.Error()
+	if upstreamTooBig.MatchString(message) {
+		newApiErr.PreserveStatusCode()
+	}
 	// Normalize client errors except rate limits before applying the channel mapping.
 	statusCode := newApiErr.StatusCode
 	if statusCode >= http.StatusBadRequest && statusCode < http.StatusInternalServerError && statusCode != http.StatusTooManyRequests {
-		newApiErr.StatusCode = http.StatusBadRequest
-		message := newApiErr.Error()
+		if !newApiErr.ShouldPreserveStatusCode() {
+			newApiErr.StatusCode = http.StatusBadRequest
+		}
 		if match := upstreamRequestSuffix.FindStringIndex(message); match != nil {
 			message = message[:match[0]]
 			newApiErr.SetMessage(message)
 		}
 		newApiErr.SetResponseMessage(message)
 	}
-	if statusCodeMappingStr == "" || statusCodeMappingStr == "{}" {
+	if newApiErr.ShouldPreserveStatusCode() || statusCodeMappingStr == "" || statusCodeMappingStr == "{}" {
 		return
 	}
 	statusCodeMapping := make(map[string]any)

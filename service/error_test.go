@@ -255,6 +255,35 @@ func TestResetStatusCodeNil(t *testing.T) {
 	require.NotPanics(t, func() { ResetStatusCode(nil, `{"400":429}`) })
 }
 
+func TestResetStatusCodePreservesTooBigErrors(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name       string
+		status     int
+		body       string
+		wantStatus int
+		wantText   string
+	}{
+		{"openai", 400, `{"error":{"message":"Entry too big, request_id: upstream-id"}}`, 400, "Entry too big, "},
+		{"original 413", 413, `{"error":{"message":"Entry TOO BIG"}}`, 413, "Entry TOO BIG"},
+		{"phrase after request", 413, `{"error":{"message":"Invalid request: payload too big"}}`, 413, "Invalid "},
+		{"plain text", 400, "Entry Too Big; internal raw details", 400, "bad response status code 400"},
+		{"original 429", 429, `{"error":{"message":"Entry too big"}}`, 429, "Entry too big"},
+		{"other errors still map", 400, `{"error":{"message":"Entry invalid"}}`, 429, "Entry invalid"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := &http.Response{StatusCode: tc.status, Body: io.NopCloser(strings.NewReader(tc.body))}
+			apiErr := RelayErrorHandler(context.Background(), resp, false)
+			for range 2 {
+				ResetStatusCode(apiErr, `{"400":429,"413":429}`)
+				require.Equal(t, tc.wantStatus, apiErr.StatusCode)
+				require.Equal(t, tc.wantText, apiErr.ToOpenAIError().Message)
+				require.Equal(t, tc.wantText, apiErr.ToClaudeError().Message)
+			}
+		})
+	}
+}
+
 func TestRelayErrorHandlerDoesNotPrintBadRequestBody(t *testing.T) {
 	var output bytes.Buffer
 	common.LogWriterMu.Lock()

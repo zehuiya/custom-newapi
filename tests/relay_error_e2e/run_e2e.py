@@ -94,9 +94,16 @@ class ErrorE2E(base.E2E):
             failure = "upstream error, Request ID: upstream-502"
             self.check_error(label, 429, rate, 429, rate)
             self.check_error(label, 502, failure, 502, failure)
-            self.configure_mapping(label, {"400": 429, "429": 503})
+            self.configure_mapping(label, {"400": 429, "413": 429, "429": 503, "502": 503})
             self.check_error(label, 401, "invalid field, REQUEST_ID=abc", 429, "invalid field, ")
             self.check_error(label, 429, rate, 503, rate)
+            self.check_error(label, 400, "Entry invalid", 429, "Entry invalid")
+            oversized = "Entry too big, request_id: mock-size-error"
+            for stream in (False, True):
+                self.check_error(label, 400, oversized, 400, "Entry too big, ", stream)
+            self.check_error(label, 413, "Payload TOO BIG", 413, "Payload TOO BIG")
+            for status in (429, 502):
+                self.check_error(label, status, "Entry too big", status, "Entry too big")
             self.check(label, enabled=False)
             self.check(label, enabled=False, stream=True)
         self.check_payloads()

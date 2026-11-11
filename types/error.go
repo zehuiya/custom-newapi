@@ -94,6 +94,7 @@ type NewAPIError struct {
 	skipRetry       bool
 	recordErrorLog  *bool
 	responseMessage *string
+	preserveStatus  bool
 	errorType       ErrorType
 	errorCode       ErrorCode
 	StatusCode      int
@@ -182,6 +183,14 @@ func (e *NewAPIError) SetMessage(message string) {
 // SetResponseMessage overrides the client-facing text without changing error metadata.
 func (e *NewAPIError) SetResponseMessage(message string) {
 	e.responseMessage = &message
+}
+
+func (e *NewAPIError) PreserveStatusCode() {
+	e.preserveStatus = true
+}
+
+func (e *NewAPIError) ShouldPreserveStatusCode() bool {
+	return e.preserveStatus
 }
 
 func (e *NewAPIError) ToOpenAIError() OpenAIError {
